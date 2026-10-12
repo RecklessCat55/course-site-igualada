@@ -70,6 +70,7 @@ website:
               - href: blocs/02-proc/teoria/01-procs.qmd
               - href: blocs/02-proc/teoria/02-create.qmd
               - href: blocs/02-proc/teoria/03-signals.qmd
+              - href: blocs/02-proc/teoria/04-pipes.qmd
             - section: "Activitats"
               contents:
               - href: blocs/02-proc/activitats/02-create.qmd
