@@ -302,7 +302,9 @@ int dup2(int fdold, int fdnew)
 
 ## Exemple a linux: `ls | wc -l` (I)
 
-![](figures/04/ls-wc.png)
+:::{style="text-align:center"}
+![](figures/04/ls-wc.png){width="80%"}
+:::
 
 ## Exemple a linux: `ls | wc -l` (II) 
 
@@ -323,7 +325,6 @@ int fd[2];
 char *p1[] = {"ls", NULL};
 char *p2[] = {"wc", "-l", NULL};
 if (pipe(fd)<0){ perror("Error de creació del pipe fd[]");exit(-1);}
-
 int pid1;int pid2;
 switch (pid1 = fork()){
     case -1: perror("Error fork()"); exit(-2); break;
@@ -400,17 +401,3 @@ if (close(fd[1]) == -1)
 waitpid(pid1,0,0);
 waitpid(pid2,0,0);
 ```
-
-## Això és tot per avui 
-
-::::: columns
-::: {.column width="60%"}
-#### TAKE HOME MESSAGE
-
-Les pipes són mecanismes de comunicació entre processos que permeten la transmissió de dades d'un procés a un altre. Es poden utilitzar per a comunicació unidireccional o bidireccional. Cal comprendre com crear pipes, escriure i llegir dades en elles, i com utilitzar-les en la redirecció d'entrada/sortida de processos en execució.
-:::
-
-::: {.column width="40%"}
-![](https://static.posters.cz/image/750/posters/looney-tunes-thats-all-folks-i295.jpg)
-:::
-:::::
