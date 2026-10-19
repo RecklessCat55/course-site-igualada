@@ -1,0 +1,255 @@
+---
+title: "Processos: Pipes amb nom (FIFO)"
+subtitle: Com es poden comunicar processos que no tenen cap parentiu?
+author: "Jordi Mateo Fornés"
+
+format:
+  revealjs:
+    theme: [simple, ../../../_extensions/udl-course/styles/revealjs.scss, ../../../styles/slides.scss]
+    filters: [../../../_extensions/udl-course/components.lua]
+    transition: fade
+    slide-number: true
+    incremental: true
+    chalkboard: false
+    slide-level: 2
+    width: 1600
+    height: 900
+    margin: 0.08
+    center: false
+    footer: 'Sistemes Operatius (SO) &nbsp; <a href="/index.html" class="home-link" aria-label="Inici"><svg class="home-icon" viewBox="0 0 120 100" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path d="M12 52 C27 43 39 31 60 12 C78 30 93 42 108 51" fill="none" stroke="currentColor" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/><path d="M25 48 C25 64 25 76 24 87 C35 84 45 85 53 87 M95 48 C95 64 95 76 97 87 C87 84 77 85 68 87" fill="none" stroke="currentColor" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/><path d="M51 87V70 C51 64 55 60 60 60 C65 60 69 64 69 70V87Z" fill="currentColor"/><path d="M82 29V17 C82 14 84 13 87 13H94 C96 13 97 15 96 17 C94 20 93 24 94 32Z" fill="currentColor"/></svg></a>'
+
+---
+
+
+## Recordatori: la limitació de `pipe()`
+
+-   `pipe(fd)` retorna **dos descriptors**, però la pipe **no té cap nom** al sistema de fitxers.
+-   L'única manera d'obtenir aquests descriptors és **heretar-los**: un ancestre comú crida `pipe()` *abans* de `fork()`.
+
+> **Dos programes llançats des de **dues terminals diferents** no poden compartir una pipe sense nom.
+
+
+## Què és una FIFO?
+
+::: {.definicio}
+Una **FIFO** (*named pipe*) és un fitxer especial del sistema de fitxers que actua com a punt de trobada d'una pipe. Qualsevol procés amb permisos la pot obrir amb `open()`.
+:::
+
+-   El **nom** i els **permisos** viuen al sistema de fitxers (un *inode* de tipus `p`).
+-   Les **dades** no toquen mai el disc: passen pel mateix *buffer* del nucli que una pipe sense nom.
+-   Per això `ls -l` mostra **mida 0**, encara que hi hagi dades pendents de llegir.
+-   Un cop oberta, una FIFO es comporta **exactament com una pipe**: flux de bytes, unidireccional, FIFO.
+
+## Una FIFO des de la *shell*
+
+::::: columns
+::: {.column width="50%"}
+#### Terminal 1
+
+``` {.bash code-line-numbers="false" }
+$ mkfifo /tmp/myfifo
+
+$ ls -l /tmp/myfifo
+prw-r--r-- 1 jordi jordi 0 ... /tmp/myfifo
+
+$ stat -c %F /tmp/myfifo
+fifo
+$ cat /tmp/myfifo      # es queda bloquejat
+hola des de l'altra terminal
+$
+```
+:::
+
+::: {.column width="50%"}
+#### Terminal 2
+
+``` {.bash code-line-numbers="false" }
+$ echo "hola des de l'altra terminal" > /tmp/myfifo
+$ rm /tmp/myfifo
+```
+:::
+:::::
+
+-   La `p` inicial de `prw-r--r--` indica el tipus *pipe*.
+-   `cat` no acaba quan arriba el missatge, sinó quan `echo` **tanca** l'extrem d'escriptura (EOF).
+
+## Creació: `mkfifo()`
+
+``` {.c code-line-numbers="false" }
+#include <sys/types.h>
+#include <sys/stat.h>
+
+int mkfifo(const char *pathname, mode_t mode);
+RETORNA:  0 si té èxit
+         -1 si falla:  errno = EEXIST  (el camí ja existeix)
+                               ENOENT  (algun directori del camí no existeix)
+                               EACCES  (sense permís d'escriptura al directori)
+                               EROFS   (sistema de fitxers només de lectura)
+```
+
+-   Els permisos efectius són `mode & ~umask`, com en qualsevol fitxer.
+-   A Linux, `mkfifo()` és una funció de la glibc que crida `mknodat()` amb `S_IFIFO | mode`.
+-   `mkfifo()` **no obre** la FIFO: només crea l'*inode*. Cal un `open()` posterior.
+-   El patró habitual és tolerar `EEXIST`:
+
+``` {.c code-line-numbers="false" }
+if (mkfifo("/tmp/canal", 0600) == -1 && errno != EEXIST) {
+    perror("mkfifo"); exit(EXIT_FAILURE);
+}
+```
+
+## Cicle de vida: el nom i les dades són independents
+
+| | Pipe sense nom | FIFO |
+|---|---|---|
+| Es crea amb | `pipe()` | `mkfifo()` + `open()` |
+| Nom al sistema de fitxers | No | Sí, fins a `unlink()` |
+| Qui hi pot accedir | Processos que hereten els descriptors | Qualsevol procés amb permisos |
+| El *buffer* del nucli existeix | Mentre algun descriptor estigui obert | Mentre algun descriptor estigui obert |
+| Dades no llegides quan tothom tanca | Es perden | Es perden (el nom continua) |
+
+
+## Obertura d'una FIFO: bloqueig
+
+::: {.concepte}
+`open()` sobre una FIFO **es bloqueja** fins que hi ha algun procés a l'altre extrem: un lector espera un escriptor i un escriptor espera un lector.
+:::
+
+```{mermaid}
+sequenceDiagram
+    participant L as Lector
+    participant K as Nucli
+    participant E as Escriptor
+    L->>K: open("/tmp/canal", O_RDONLY)
+    Note over L: bloquejat
+    E->>K: open("/tmp/canal", O_WRONLY)
+    K-->>L: retorna fd
+    K-->>E: retorna fd
+    E->>K: write(fd, "hola", 4)
+    K-->>L: read() retorna 4
+    E->>K: close(fd)
+    K-->>L: read() retorna 0 (EOF)
+```
+
+## Obertura: modes i `O_NONBLOCK`
+
+| `open()` amb... | Hi ha procés a l'altre extrem | No hi ha ningú a l'altre extrem |
+|---|---|---|
+| `O_RDONLY` | Retorna el fd | **Es bloqueja** |
+| `O_WRONLY` | Retorna el fd | **Es bloqueja** |
+| `O_RDONLY \| O_NONBLOCK` | Retorna el fd | Retorna el fd immediatament |
+| `O_WRONLY \| O_NONBLOCK` | Retorna el fd | **Falla amb `ENXIO`** |
+| `O_RDWR` | No definit per POSIX (a Linux no es bloqueja) | No definit per POSIX |
+
+
+> `O_RDWR` funciona a Linux, però és **no portable**: no el feu servir per esquivar el bloqueig.
+
+
+## Lectura i escriptura: la semàntica de les pipes
+
+-   `read()` sobre una FIFO **buida** amb escriptors oberts: **es bloqueja**.
+-   `read()` sobre una FIFO **buida sense cap escriptor**: retorna **0** (EOF).
+-   `write()` quan **no queda cap lector**: el nucli envia **`SIGPIPE`**; si el senyal s'ignora o es captura, `write()` retorna -1 amb `errno = EPIPE`.
+-   `write()` sobre una FIFO **plena**: es bloqueja fins que el lector buidi espai.
+-   Escriptures de **com a molt `PIPE_BUF` bytes** són **atòmiques**: no s'intercalen amb les d'altres escriptors. A Linux `PIPE_BUF` = 4096 (POSIX garanteix com a mínim 512).
+-   La **capacitat** (64 KiB per defecte a Linux) és una cosa diferent de `PIPE_BUF`; es consulta amb `fcntl(fd, F_GETPIPE_SZ)`.
+
+::: {.errorcomu}
+Una FIFO és un **flux de bytes**: no conserva diferències entre missatges. Dos `write()` de 4 bytes poden arribar en un sol `read()` de 8. I el que llegeix `read()` **no acaba en `'\0'`**.
+:::
+
+## Exemple: escriptor independent
+
+``` {.c code-line-numbers="false" }
+#include <errno.h>
+#include <fcntl.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
+#define FIFO "/tmp/myfifo"
+
+int main(void) {
+    if (mkfifo(FIFO, 0600) == -1 && errno != EEXIST) { perror("mkfifo"); exit(EXIT_FAILURE); }
+
+    int fd = open(FIFO, O_WRONLY);              /* bloqueja fins que hi ha un lector */
+    if (fd == -1) { perror("open"); exit(EXIT_FAILURE); }
+
+    for (int i = 0; i < 3; i++) {
+        char msg[32];
+        int n = snprintf(msg, sizeof msg, "missatge %d\n", i);
+        if (write(fd, msg, n) != n) { perror("write"); exit(EXIT_FAILURE); }
+        sleep(1);
+    }
+    close(fd);                                  /* el lector rebrà EOF */
+    return EXIT_SUCCESS;
+}
+```
+
+## Exemple: lector independent
+
+``` {.c code-line-numbers="false" }
+#include <errno.h>
+#include <fcntl.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
+#define FIFO "/tmp/myfifo"
+
+int main(void) {
+    if (mkfifo(FIFO, 0600) == -1 && errno != EEXIST) { perror("mkfifo"); exit(EXIT_FAILURE); }
+
+    int fd = open(FIFO, O_RDONLY);              /* bloqueja fins que hi ha un escriptor */
+    if (fd == -1) { perror("open"); exit(EXIT_FAILURE); }
+
+    char buf[128];
+    ssize_t n;
+    while ((n = read(fd, buf, sizeof buf)) > 0)
+        write(STDOUT_FILENO, buf, n);           /* buf NO és una cadena: no té '\0' */
+    if (n == -1) perror("read");
+
+    close(fd);
+    unlink(FIFO);                               /* esborrem el nom */
+    return EXIT_SUCCESS;
+}
+```
+
+## Execució: qualsevol ordre funciona
+
+``` {.bash code-line-numbers="false" }
+$ gcc -Wall -Wextra -o escriptor escriptor.c
+$ gcc -Wall -Wextra -o lector lector.c
+$ ./lector &          # es bloqueja a open()
+$ ./escriptor         # desbloqueja el lector
+missatge 0
+missatge 1
+missatge 2
+```
+
+-   Tots dos programes criden `mkfifo()` tolerant `EEXIST`: no importa qui arrenca primer.
+-   No hi ha cap `fork()`: els dos processos **no tenen cap relació** de parentiu.
+-   Què passa si engeguem **dos** escriptors alhora? I **dos** lectors?
+
+::: {.reflexio}
+1. Amb dos lectors, cada byte el llegeix **només un** d'ells: una FIFO no fa difusió (*broadcast*). Qui rep cada missatge depèn de la planificació. 
+2. Amb dos escriptors, les escriptures de **mida ≤ `PIPE_BUF`** arriben **senceres** i sense intercalació. Si escrivim més de `PIPE_BUF`, el nucli pot intercalar bytes d'ambdós escriptors.
+:::
+
+
+## Bones pràctiques
+
+::: {.bonapractica}
+-   Crear la FIFO tolerant `EEXIST` i esborrar-la amb `unlink()` quan ja no calgui.
+-   Comprovar **sempre** el valor de retorn de `read()` i `write()`; tractar lectures curtes.
+-   Missatges de mida fixa ≤ `PIPE_BUF` si hi ha diversos escriptors.
+-   Ignorar o capturar `SIGPIPE` en processos de llarga durada i gestionar `EPIPE`.
+-   Permisos restrictius (`0600`) i camins dins d'un directori propi, no directament a `/tmp` compartit.
+-   Obrir les FIFO en un **ordre global** consistent entre tots els processos.
+:::
+
+
+
+

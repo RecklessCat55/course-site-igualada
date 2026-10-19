@@ -1,0 +1,1232 @@
+---
+title: "Pralab 05 (II): shell: `strtok`, `;` i senyals"
+author: "Jordi Mateo Fornés"
+format:
+  udl-course-html:
+    toc: false
+    number-sections: false
+---
+
+## Introducció
+
+Aquesta setmana la shell fa un salt de qualitat. Ja sabem **llegir** una línia (`getline`) i **executar** una comanda (`fork` + `execvp` + `wait`), però només una paraula i, per culpa de l'error de la setmana passada, ni això. Avui:
+
+- la fem funcionar amb `strtok` (una solució ràpida, i veurem **on s'acaba**);
+- executem **diverses comandes** per línia (`ls -l ; pwd`) 
+- ordenem el codi en **funcions petites** i resolem el problema de fons amb `strtok_r`;
+- aprenem què passa quan algú prem **Ctrl-C** (i **Ctrl-Z**), i com es gestiona amb `signal` i, bé, amb `sigaction`.
+
+> **Què ha de passar perquè `ls -l ; pwd` funcioni? I perquè Ctrl-C mati `sleep` però no la nostra shell?**
+
+---
+
+### Punt de partida
+
+Aquest és el codi on vam deixar la sessió passada (`shell.c`). **Compila'l sense `-fsanitize`** i escriu `ls`:
+
+```{.c}
+#include <stdio.h>
+#include <string.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <unistd.h>
+#include <stdlib.h>
+
+#define ACABAR(s) (strcmp((s), "q") == 0)
+
+int executa(char **argv);
+
+int main(void)
+{
+    char *linia = NULL;
+    size_t cap = 0;
+
+    while (1) {
+        printf("> ");
+
+        ssize_t n = getline(&linia, &cap, stdin);
+
+        if (n < 0) {
+            printf("\n");
+            break;
+        }
+        linia[strcspn(linia, "\n")] = '\0';
+        printf("has escrit: '%s' (%zd bytes llegits)\n", linia, n);
+
+        if (ACABAR(linia))
+            break;
+
+        executa(&linia);
+    }
+
+    free(linia);
+
+    return 0;
+}
+
+int executa(char **argv)
+{
+    pid_t pid = fork();
+
+    if (pid < 0) {
+        perror("fork");
+        return -1;
+    }
+
+    if (pid == 0) {
+        execvp(argv[0], argv);
+        perror(argv[0]);
+        _exit(127);
+    }
+
+    int status;
+
+    wait(&status);
+
+    if (WIFEXITED(status)) {
+        return WEXITSTATUS(status);
+    }
+
+    return 128 + WTERMSIG(status);
+}
+```
+
+```{.bash}
+gcc -Wall -Wextra -g -O0 -o shell shell.c
+./shell
+```
+
+---
+
+### Part C — Arreglem l'error amb `strtok`
+
+Per trossejar una línia en paraules la biblioteca ja ens dona una eina: `strtok`.
+
+::: {.exercici}
+Obre `man 3 strtok` i respon:
+
+1. Quina és la signatura? Què retorna?
+2. La primera crida i les següents **no es fan igual**. Què passa a la primera? I a les següents?
+3. Què fa amb la cadena que li passem? Llegeix la secció **BUGS**: quines precaucions hi recomana?
+4. Quin és el significat del segon paràmetre?
+:::
+
+<details>
+<summary><b>Pots veure el raonament</b></summary>
+
+:::{.solucio}
+1. `char *strtok(char *str, const char *delim);` Retorna un punter al **següent token**, o `NULL` quan no en queden.
+2. A la primera crida es passa la cadena (`strtok(linia, " \t")`). A les següents, **`NULL`** (`strtok(NULL, " \t")`): la funció **recorda on era** amb una variable interna.
+3. **Modifica la cadena**: escriu un `'\0'` allà on hi havia el delimitador. Per tant no es pot usar sobre literals. A BUGS s'avisa, a més, que **el delimitador concret es perd**, i que el seu estat intern és **estàtic** (no serveix per a *threads*; existeix `strtok_r`).
+4. És una cadena amb **tots els caràcters que separen** tokens (`" \t"` = espai i tabulador).
+:::
+
+</details>
+
+#### La shell funcional
+
+Substituïm el cos del bucle. Ja no cal el `printf("has escrit...")`. Posem els tokens en un array de punters acabat en `NULL`, que és el que `execvp` espera:
+
+```{.c}
+#define MAX_ARGS 64
+
+/* ... dins del main, després de linia[strcspn(linia, "\n")] = '\0'; ... */
+
+        char *args[MAX_ARGS];
+        int nargs = 0;
+
+        char *tok = strtok(linia, " \t");
+
+        while (tok != NULL && nargs < MAX_ARGS - 1) {
+            args[nargs++] = tok;
+            tok = strtok(NULL, " \t");
+        }
+
+        args[nargs] = NULL;
+
+        if (nargs == 0) {
+            continue;
+        }
+
+        if (ACABAR(args[0])) {
+            break;
+        }
+
+        executa(args);
+```
+
+::: {.exercici}
+- Per què el límit és `MAX_ARGS - 1` i no `MAX_ARGS`?
+- Per què cal `if (nargs == 0) continue;`? Què passaria amb una línia buida si no hi fos?
+- Hem canviat `ACABAR(linia)` per `ACABAR(args[0])`. Què hem guanyat? Recorda el `.reflexio` de la sessió passada (`"  q  "`).
+- `args` és un array, però `executa` demana un `char **`. Per què és vàlid?
+:::
+
+<details>
+<summary><b>Pots veure el raonament</b></summary>
+
+:::{.solucio}
+- Perquè després dels tokens hi ha d'haver lloc per al **`NULL`** final (`args[nargs] = NULL`). Si omplíssim tot l'array amb tokens, l'escriptura del `NULL` seria **fora de límits**.
+- Amb una línia buida, `args[0]` és `NULL`, i `ACABAR(args[0])` faria `strcmp(NULL, "q")` i `execvp(NULL, ...)` fallaria. Per això saltem la volta.
+- Ara `q` funciona amb espais al davant o al darrere (`"  q  "`): `strtok` ja els ha saltat.
+- Perquè un array en una expressió **decau a un punter al primer element** (`char *args[...]` → `char **`), com ja vam veure als pralabs de punters.
+:::
+
+</details>
+
+::: {.exercici}
+**Prediu abans de provar.** Un cop tokenitzada la línia `ls -l`, què imprimeix `printf("%s\n", linia)`? Els `args[i]`: són **còpies** del text o punters **a dins** de `linia`? Què els passarà a la volta següent del bucle, quan `getline` torni a escriure a `linia`?
+:::
+
+<details>
+<summary><b>Pots veure el raonament</b></summary>
+
+:::{.solucio}
+Imprimeix només **`ls`**: `strtok` ha escrit un `'\0'` en lloc de l'espai, així que per a `printf` la cadena s'acaba allà. Els `args[i]` **apunten a dins de `linia`**: no hi ha cap còpia. Per tant, **són vàlids només fins a la propera crida a `getline`**. Aquí no és un problema perquè els fem servir dins de la mateixa volta, però ho tindrem present més endavant.
+:::
+
+</details>
+
+:::{.bonapractica}
+**Punt de control C.** `ls -l` funciona. `ls     -l /tmp` també. Una línia buida o amb només espais torna al prompt. `  q  ` surt. **Tenim una shell funcional.**
+:::
+
+Però un `ls -l ; pwd` de debò són **dues** comandes, i la nostra shell en pot fer només una per línia.
+
+---
+
+### Part D — Diverses comandes amb `;`
+
+Si `strtok` ens serveix per partir en paraules, també ens servirà per partir en comandes: primer pel `;`, i després cada comanda per espais. Escrit amb dos bucles:
+
+```{.c}
+char *cmd = strtok(linia, ";");
+
+while (cmd != NULL) {
+    char *args[MAX_ARGS];
+    int nargs = 0;
+
+    char *tok = strtok(cmd, " \t");
+
+    while (tok != NULL && nargs < MAX_ARGS - 1) {
+        args[nargs++] = tok;
+        tok = strtok(NULL, " \t");
+    }
+
+    args[nargs] = NULL;
+
+    if (nargs > 0) {
+        executa(args);
+    }
+
+    cmd = strtok(NULL, ";");
+}
+```
+
+i `strtok` ens serveix per partir en paraules, també ens servirà per partir en comandes: primer pel `;`, i després cada comanda per espais. 
+
+```{.c}
+/* Intent ingenu: substitueix el bucle de C.3 per aquest */
+char *cmd = strtok(linia, ";");
+
+while (cmd != NULL) {
+    char *args[MAX_ARGS];
+    int nargs = 0;
+
+    char *tok = strtok(cmd, " \t");
+
+    while (tok != NULL && nargs < MAX_ARGS - 1) {
+        args[nargs++] = tok;
+        tok = strtok(NULL, " \t");
+    }
+
+    args[nargs] = NULL;
+
+    if (nargs > 0) {
+        executa(args);
+    }
+
+    cmd = strtok(NULL, ";");
+}
+```
+
+::: {.exercici}
+**Prediu abans de provar.** Amb la línia `ls -l ; pwd`, quines comandes s'executen? Dóna't una pista: rellegeix el `.concepte` de C.2 (*una sola variable*) i pensa què fa `strtok(NULL, ...)` just després que el bucle intern hagi acabat.
+:::
+
+<details>
+<summary><b>Pots veure el raonament</b></summary>
+
+:::{.solucio}
+S'executa **només `ls -l`**. `pwd` no s'executa, i **no hi ha cap error ni avís**.
+
+`strtok` guarda *on era* en **una única variable interna**, compartida pels dos bucles. Quan el bucle intern acaba de recórrer `"ls -l "`, aquesta variable ja apunta al final d'aquella comanda. Quan el bucle extern crida `strtok(NULL, ";")`, continua des d'allà: no queda res, i retorna `NULL`. El tros `" pwd"` mai es visita.
+
+Aquest és el límit de `strtok`: **només pot tenir una cadena en curs de trossejar alhora**.
+:::
+
+</details>
+
+#### Dues fases separades
+
+Solució primer analitzem *tota* la línia en comandes, i només quan hem acabat analitzem cada comanda en paraules.
+
+```{.c}
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <unistd.h>
+
+#define ACABAR(s) (strcmp((s), "q") == 0)
+#define MAX_ARGS 64
+#define MAX_CMDS 8
+
+int executa(char **argv);
+
+int main(void)
+{
+    char *linia = NULL;
+    size_t cap = 0;
+    int estat = 0;
+    int acabar = 0;
+
+    while (!acabar) {
+        printf("[%d]> ", estat);
+        fflush(stdout);
+
+        ssize_t n = getline(&linia, &cap, stdin);
+
+        if (n < 0) {
+            printf("\n");
+            break;
+        }
+
+        linia[strcspn(linia, "\n")] = '\0';
+
+        /* Fase 1: la línia es parteix en comandes (delimitador ';') */
+        char *comandes[MAX_CMDS];
+        int ncomandes = 0;
+
+        char *cmd = strtok(linia, ";");
+
+        while (cmd != NULL && ncomandes < MAX_CMDS) {
+            comandes[ncomandes++] = cmd;
+            cmd = strtok(NULL, ";");
+        }
+
+        /* Fase 2: cada comanda es parteix en paraules (espai i tabulador) */
+        for (int i = 0; i < ncomandes; i++) {
+            char *args[MAX_ARGS];
+            int nargs = 0;
+
+            char *tok = strtok(comandes[i], " \t");
+
+            while (tok != NULL && nargs < MAX_ARGS - 1) {
+                args[nargs++] = tok;
+                tok = strtok(NULL, " \t");
+            }
+
+            args[nargs] = NULL;
+
+            if (nargs == 0) {
+                continue;
+            }
+
+            if (ACABAR(args[0])) {
+                acabar = 1;
+                break;
+            }
+
+            estat = executa(args);
+        }
+    }
+
+    free(linia);
+
+    return 0;
+}
+```
+
+`executa` **no canvia** respecte de la Part B.
+
+::: {.exercici}
+- Dins del `for`, `ACABAR` fa `break`. **Quin bucle abandona?** Per què hem hagut d'afegir la variable `acabar`?
+- Què fa `ls ; q ; echo no`? S'arriba a executar `echo`?
+- Què passa si escrivim **9** comandes separades per `;`? Mira la condició `ncomandes < MAX_CMDS`.
+- Les comandes (`comandes[i]`) són punters a dins de `linia`. Fins quan són vàlids?
+:::
+
+<details>
+<summary><b>Pots veure el raonament</b></summary>
+
+:::{.solucio}
+- Només abandona el **`for`**. El `while` continuaria i tornaria a demanar una línia. La variable `acabar` és un **missatge** del bucle intern al bucle extern: ja no cal continuar. A la Part F veurem una manera més neta de fer-ho sense variable.
+- Executa `ls`, arriba a `q` i **surt**. `echo no` no s'executa.
+- El bucle s'atura a la vuitena comanda i **la resta s'ignora en silenci**: ni error ni avís. Un shell que descarta ordres sense dir-ho és un problema; a la Part F ho arreglarem.
+- Fins a la propera crida a `getline`, igual que els `args` de la Part C: són dins del buffer de `linia`.
+:::
+
+</details>
+
+---
+
+### Part E — Senyals
+
+Ja tenim una shell amb diverses comandes. Però falta una cosa: què passa quan algú prem **Ctrl-C**?
+
+:::{.concepte title="Recordatori de senyals"}
+- Un **senyal** és una notificació asíncrona que el nucli (o un altre procés) envia a un procés. Cada senyal té un **número** i una **acció per defecte** (acabar, ignorar, aturar...). `kill -l` els llista, i `man 7 signal` explica tots els detalls.
+- `kill(pid, sig)` (i l'ordre `kill`) en **envia**. `signal` i `sigaction` serveixen per canviar què fa un procés quan en rep un: executar un **handler**, **ignorar-lo** (`SIG_IGN`) o tornar a l'acció per defecte (`SIG_DFL`).
+- Alguns no es poden capturar ni ignorar: **`SIGKILL`** i **`SIGSTOP`**.
+:::
+
+#### E.1 — Un fill que mor per un senyal
+
+Arrenca la shell, escriu `sleep 30` i prem **Ctrl-C**.
+
+::: {.exercici}
+Què passa? Quin dels dos processos mor: la shell, `sleep`, o tots dos? **Per què?**
+:::
+
+<details>
+<summary><b>Pots veure el raonament</b></summary>
+
+:::{.solucio}
+**Moren tots dos**, i tornes a `bash`. Ctrl-C **no** envia el senyal a un procés concret: el terminal el converteix en `SIGINT` i l'envia a **tots els processos del grup en primer pla**. La shell i el seu fill `sleep` són al mateix grup (el fill hereta el grup del pare), així que **tots dos** reben `SIGINT`, i l'acció per defecte és acabar.
+
+Ho pots comprovar des d'una altra terminal mentre `sleep 30` corre: `ps -o pid,ppid,pgid,comm -C shell,sleep`. Tots dos tenen el mateix `PGID`.
+
+Això no és el que volem: Ctrl-C ha de matar `sleep`, però **no la shell**.
+:::
+
+</details>
+
+#### La shell ignora `SIGINT`, el fill no
+
+La idea: la **shell ignora** `SIGINT`, i el **fill** el manté actiu. Afegeix `#include <signal.h>` i, al principi del `main`:
+
+```{.c}
+    signal(SIGINT, SIG_IGN);
+```
+
+:::{.concepte}
+`signal(signum, gestor)` instal·la un gestor i **retorna l'anterior**. Per a `SIG_IGN` i `SIG_DFL` és fiable i portable: `man 2 signal` diu que és l'**únic** ús portable. Els problemes comencen quan hi posem un handler propi (E.6).
+:::
+
+Compila i prova `sleep 30` + Ctrl-C **abans** de tocar `executa`.
+
+::: {.exercici}
+Ara la shell ignora Ctrl-C. Què passa amb `sleep 30`: mor, o segueix corrent? **Pensa:** el fill s'ha creat amb `fork` i convertit en `sleep` amb `execvp`.
+:::
+
+<details>
+<summary><b>Pots veure el raonament</b></summary>
+
+:::{.solucio}
+**`sleep` segueix corrent** els 30 segons. La shell sobreviu, però Ctrl-C **no té cap efecte** sobre el fill. El motiu és que **la disposició ignorar s'hereta**: el `fork` la copia, i l'`exec` **no la restaura**. El `sleep` neix amb `SIGINT` ignorat, i no ho sap.
+
+(Passa per un motiu concret: `exec` només restaura a l'acció per defecte els senyals que tenien un **handler**; els que són `SIG_IGN` es queden com estaven.)
+
+La solució és que el **fill restauri l'acció per defecte abans de l'`exec`**:
+
+```{.c}
+    if (pid == 0) {
+        signal(SIGINT, SIG_DFL);      /* el fill torna a l'acció per defecte */
+        execvp(argv[0], argv);
+        perror(argv[0]);
+        _exit(127);
+    }
+```
+:::
+
+</details>
+
+Afegeix aquesta línia al fill d'`executa`, compila i comprova-ho.
+
+
+#### `SIGSTOP` i `SIGTSTP`: Ctrl-Z no és el que sembla
+
+Ctrl-C té un germà: **Ctrl-Z**. Provem de protegir la shell igual que amb `SIGINT`.
+
+::: {.exercici}
+Afegeix `signal(SIGSTOP, SIG_IGN);` al `main` i compila amb `-Wall -Wextra`.
+
+1. Avisa el compilador?
+2. Des d'una altra terminal, fes `kill -STOP <pid de la shell>`. Què passa? (`pgrep -x shell` et dona el pid; `kill -CONT` el desbloqueja.)
+3. Comprova el valor que retorna `signal`: `if (signal(SIGSTOP, SIG_IGN) == SIG_ERR) perror("signal");`. Què imprimeix?
+:::
+
+<details>
+<summary><b>Pots veure el raonament</b></summary>
+
+:::{.solucio}
+1. **No avisa**: la crida és sintàcticament perfecta.
+2. La shell **s'atura igualment**.
+3. Imprimeix `signal: Invalid argument` (`EINVAL`).
+
+`SIGKILL` i `SIGSTOP` **no es poden capturar ni ignorar**: són l'última defensa del nucli per poder controlar qualsevol procés. Per això `signal` falla, i per això **cal comprovar el valor de retorn**: si no, la línia sembla una protecció i no fa res.
+:::
+
+</details>
+
+Treu la línia de `SIGSTOP`. Ctrl-Z **no** envia `SIGSTOP`: envia **`SIGTSTP`**, que és la versió *educada* i **sí que es pot ignorar**.
+
+::: {.exercici}
+1. Sense tocar res més, escriu `sleep 30` i prem **Ctrl-Z**. Què passa, i amb quin processos?
+2. Ara afegeix `signal(SIGTSTP, SIG_IGN);` **només al `main`** (no toquis `executa`). Torna-ho a provar. Per què el `sleep` tampoc no s'atura?
+3. Si el fill **restaurés** `SIGTSTP` a `SIG_DFL` (com fem amb `SIGINT`), Ctrl-Z aturaria `sleep`. Què faria llavors la shell?
+:::
+
+<details>
+<summary><b>Pots veure el raonament</b></summary>
+
+:::{.solucio}
+1. **S'atura tot el grup**: la shell i el `sleep`, i tornes a `bash` amb un missatge `Stopped`. (`fg` ho reprèn.) Igual que amb Ctrl-C, el terminal envia el senyal a tot el grup en primer pla.
+2. Perquè **la disposició ignorar s'hereta** a través de `fork` i `exec`: és exactament el que vam veure amb `SIGINT` a E.3. Aquí ens va bé: l'hem deixat **expressament** heretat.
+3. **Es quedaria bloquejada.** `sleep` queda aturat, però `wait(&status)` **no informa de les aturades** (cal `waitpid` amb l'opció `WUNTRACED`), de manera que la shell esperaria per sempre. Es pot desfer des d'una altra terminal amb `kill -CONT <pid del sleep>`.
+
+Fer-ho bé (poder aturar un procés amb Ctrl-Z, reprendre'l amb `fg`, tenir-ne diversos en segon pla...) és el que s'anomena **control de tasques** (*job control*): `WUNTRACED`, `SIGCONT`, grups de processos, el terminal de control... Queda fora d'aquesta sessió i és un bon repte.
+:::
+
+</details>
+
+Deixem, doncs, `signal(SIGTSTP, SIG_IGN);` al `main` i el fill només restaura `SIGINT`.
+
+#### El mateix, amb `sigaction`
+
+Fins ara hem fet servir `signal`, que és curta però té mala fama: el seu comportament **varia entre sistemes** (`man 2 signal`). `sigaction` és la crida de debò: tot és explícit i no depèn de la plataforma. Aquí tens el mateix que fem fins ara escrit amb cadascuna:
+
+:::::{.panel-tabset}
+
+##### `signal` (la ràpida)
+
+```{.c}
+/* al principi del main */
+signal(SIGINT,  SIG_IGN);
+signal(SIGTSTP, SIG_IGN);
+
+/* al fill d'executa, abans de l'execvp */
+signal(SIGINT, SIG_DFL);
+```
+
+##### `sigaction` (la ben feta)
+
+Una funció auxiliar (i `#include <string.h>`, que ja hi és):
+
+```{.c}
+static int posa_senyal(int signum, void (*gestor)(int))
+{
+    struct sigaction sa;
+
+    memset(&sa, 0, sizeof sa);
+    sa.sa_handler = gestor;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;
+
+    if (sigaction(signum, &sa, NULL) < 0) {
+        perror("sigaction");
+        return -1;
+    }
+
+    return 0;
+}
+```
+
+```{.c}
+/* al principi del main */
+posa_senyal(SIGINT,  SIG_IGN);
+posa_senyal(SIGTSTP, SIG_IGN);
+
+
+posa_senyal(SIGINT, SIG_DFL);
+```
+
+:::::
+
+::: {.exercici}
+- Per què `memset(&sa, 0, sizeof sa)` abans d'omplir l'estructura?
+- Què és `sa_mask`? I `sa_flags`? Mira `man 2 sigaction`.
+- Amb només `SIG_IGN` i `SIG_DFL`, quina diferència **observable** hi ha entre les dues versions?
+:::
+
+<details>
+<summary><b>Pots veure el raonament</b></summary>
+
+:::{.solucio}
+- `struct sigaction` té més camps dels que nosaltres omplim (`sa_mask`, `sa_flags`...), i els que no toquem han de tenir un valor **definit**.
+- `sa_mask` és el conjunt de senyals que es **bloquegen mentre s'executa el handler**. `sa_flags` modifica el comportament (per exemple, `SA_RESTART`).
+- **Cap.** Per a `SIG_IGN` i `SIG_DFL` totes dues fan el mateix. La diferència només es nota quan hi posem un **handler propi**: amb `signal` el comportament depèn del sistema, amb `sigaction` el decidim nosaltres.
+:::
+
+</details>
+
+
+---
+
+#### El programa complet
+
+Aquest és el programa que hem construït a classe, en dues versions. Totes dues tracten les comandes exactament igual; només canvia com es gestiona `SIGINT`:
+
+- **`signal` + `SIG_IGN`.** La shell ignora `SIGINT`. Ctrl-C al prompt només mostra `^C`.
+- **`sigaction` + handler.** La shell captura `SIGINT` amb un handler que escriu un salt de línia. Amb `SA_RESTART`, quan el handler acaba el nucli **reprèn** automàticament la crida interrompuda (`getline`, `wait`), i el programa no ha de fer res més.
+
+:::::{.panel-tabset}
+
+##### `signal` (simple)
+
+```{.c}
+#include <signal.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <unistd.h>
+
+#define ACABAR(s) (strcmp((s), "q") == 0)
+#define MAX_ARGS 64
+#define MAX_CMDS 8
+
+int executa(char **argv);
+
+int main(void)
+{
+    char *linia = NULL;
+    size_t cap = 0;
+    int estat = 0;
+    int acabar = 0;
+
+    if (signal(SIGINT, SIG_IGN) == SIG_ERR || signal(SIGTSTP, SIG_IGN) == SIG_ERR) {
+        perror("signal");
+        return 1;
+    }
+
+    while (!acabar) {
+        printf("[%d]> ", estat);
+        fflush(stdout);
+
+        ssize_t n = getline(&linia, &cap, stdin);
+
+        if (n < 0) {
+            printf("\n");
+            break;
+        }
+
+        linia[strcspn(linia, "\n")] = '\0';
+
+        char *comandes[MAX_CMDS];
+        int ncomandes = 0;
+
+        char *cmd = strtok(linia, ";");
+
+        while (cmd != NULL && ncomandes < MAX_CMDS) {
+            comandes[ncomandes++] = cmd;
+            cmd = strtok(NULL, ";");
+        }
+
+        for (int i = 0; i < ncomandes; i++) {
+            char *args[MAX_ARGS];
+            int nargs = 0;
+
+            char *tok = strtok(comandes[i], " \t");
+
+            while (tok != NULL && nargs < MAX_ARGS - 1) {
+                args[nargs++] = tok;
+                tok = strtok(NULL, " \t");
+            }
+
+            args[nargs] = NULL;
+
+            if (nargs == 0) {
+                continue;
+            }
+
+            if (ACABAR(args[0])) {
+                acabar = 1;
+                break;
+            }
+
+            estat = executa(args);
+        }
+    }
+
+    free(linia);
+
+    return 0;
+}
+
+int executa(char **argv)
+{
+    pid_t pid = fork();
+
+    if (pid < 0) {
+        perror("fork");
+        return -1;
+    }
+
+    if (pid == 0) {
+        if (signal(SIGINT, SIG_DFL) == SIG_ERR) {
+            perror("signal");
+            _exit(126);
+        }
+
+        execvp(argv[0], argv);
+        perror(argv[0]);
+        _exit(127);
+    }
+
+    int status;
+
+    if (wait(&status) < 0) {
+        perror("wait");
+        return -1;
+    }
+
+    if (WIFEXITED(status)) {
+        return WEXITSTATUS(status);
+    }
+
+    int sig = WTERMSIG(status);
+
+    fprintf(stderr, "%s\n", strsignal(sig));
+
+    return 128 + sig;
+}
+```
+
+##### `sigaction` (ben feta)
+
+```{.c}
+#include <errno.h>
+#include <signal.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <unistd.h>
+
+#define ACABAR(s) (strcmp((s), "q") == 0)
+#define MAX_ARGS 64
+#define MAX_CMDS 8
+
+int executa(char **argv);
+
+static void gestor_sigint(int signum)
+{
+    int errno_guardat = errno;
+
+    (void)signum;
+    write(STDOUT_FILENO, "\n", 1);
+    errno = errno_guardat;
+}
+
+static int posa_senyal(int signum, void (*gestor)(int))
+{
+    struct sigaction sa;
+
+    memset(&sa, 0, sizeof sa);
+    sa.sa_handler = gestor;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = SA_RESTART;
+
+    if (sigaction(signum, &sa, NULL) < 0) {
+        perror("sigaction");
+        return -1;
+    }
+
+    return 0;
+}
+
+int main(void)
+{
+    char *linia = NULL;
+    size_t cap = 0;
+    int estat = 0;
+    int acabar = 0;
+
+    if (posa_senyal(SIGINT, gestor_sigint) < 0 || posa_senyal(SIGTSTP, SIG_IGN) < 0) {
+        return 1;
+    }
+
+    while (!acabar) {
+        printf("[%d]> ", estat);
+        fflush(stdout);
+
+        ssize_t n = getline(&linia, &cap, stdin);
+
+        if (n < 0) {
+            printf("\n");
+            break;
+        }
+
+        linia[strcspn(linia, "\n")] = '\0';
+
+        char *comandes[MAX_CMDS];
+        int ncomandes = 0;
+
+        char *cmd = strtok(linia, ";");
+
+        while (cmd != NULL && ncomandes < MAX_CMDS) {
+            comandes[ncomandes++] = cmd;
+            cmd = strtok(NULL, ";");
+        }
+
+        for (int i = 0; i < ncomandes; i++) {
+            char *args[MAX_ARGS];
+            int nargs = 0;
+
+            char *tok = strtok(comandes[i], " \t");
+
+            while (tok != NULL && nargs < MAX_ARGS - 1) {
+                args[nargs++] = tok;
+                tok = strtok(NULL, " \t");
+            }
+
+            args[nargs] = NULL;
+
+            if (nargs == 0) {
+                continue;
+            }
+
+            if (ACABAR(args[0])) {
+                acabar = 1;
+                break;
+            }
+
+            estat = executa(args);
+        }
+    }
+
+    free(linia);
+
+    return 0;
+}
+
+int executa(char **argv)
+{
+    pid_t pid = fork();
+
+    if (pid < 0) {
+        perror("fork");
+        return -1;
+    }
+
+    if (pid == 0) {
+        if (posa_senyal(SIGINT, SIG_DFL) < 0) {
+            _exit(126);
+        }
+
+        execvp(argv[0], argv);
+        perror(argv[0]);
+        _exit(127);
+    }
+
+    int status;
+
+    if (wait(&status) < 0) {
+        perror("wait");
+        return -1;
+    }
+
+    if (WIFEXITED(status)) {
+        return WEXITSTATUS(status);
+    }
+
+    int sig = WTERMSIG(status);
+
+    fprintf(stderr, "%s\n", strsignal(sig));
+
+    return 128 + sig;
+}
+```
+
+:::::
+
+::: {.exercici}
+1. Compara les dues versions amb `diff`. Què afegeix la versió amb `sigaction`?
+2. Prem Ctrl-C al prompt sense haver escrit res. Què veus amb cada versió? Per què la versió `sigaction` no torna a pintar el prompt?
+3. A la versió `sigaction`, canvia `SA_RESTART` per `0`, compila i prova dues coses: Ctrl-C al prompt, i Ctrl-C durant un `sleep 30`. Què passa en cada cas? Per què?
+4. El fill fa `posa_senyal(SIGINT, SIG_DFL)` abans de l'`execvp`. Recorda què fa `exec` amb els senyals que tenen un **handler**. És imprescindible aquesta línia? Per què la deixem?
+5. Per què el handler desa i restaura `errno`? Per què fa servir `write` i no `printf`?
+:::
+
+<details>
+<summary><b>Pots veure el raonament</b></summary>
+
+:::{.solucio}
+1. El handler `gestor_sigint` i la funció `posa_senyal`, que instal·la la disposició amb `sigaction`. La resta del programa és idèntica.
+2. Amb `signal`, el terminal mostra `^C`, descarta el que hi hagués escrit a la línia i el cursor es queda allà. Amb `sigaction` surt `^C` i un salt de línia, però **no** el prompt: per `SA_RESTART`, `getline` no ha retornat mai, continua esperant la mateixa línia. Pots escriure una comanda igualment.
+3. Sense `SA_RESTART`, la crida interrompuda **falla** amb `errno == EINTR`:
+    - Al prompt, `getline` retorna `-1`. El nostre codi ho interpreta com a final de fitxer i **la shell surt**, com si haguessis premut Ctrl-D.
+    - Durant el `sleep`, `wait` retorna `-1`: surt `wait: Interrupted system call` i el prompt mostra `[-1]`. El `sleep` mort no s'ha recollit: queda **zombi**, i el `wait` de la comanda següent el recull a ell en lloc del fill nou.
+
+    Per evitar-ho sense `SA_RESTART`, caldria tractar `EINTR` a mà a cada crida que es pugui interrompre. `SA_RESTART` ens estalvia tot aquest codi. És el que fa també `signal` amb un handler a glibc (semàntica BSD); en altres sistemes `signal` no reprèn les crides i, a més, desinstal·la el handler després del primer senyal (semàntica System V). Per això amb un handler cal `sigaction`: el comportament el decidim nosaltres.
+4. No és imprescindible: `exec` restaura a `SIG_DFL` tots els senyals que tenien un handler (a diferència dels `SIG_IGN`, que es mantenen). La deixem per dos motius: entre el `fork` i l'`exec` el fill encara executaria el handler de la shell, i si algun dia la shell passa a `SIG_IGN`, el fill continua funcionant bé. Fa explícit el que volem.
+5. `printf` no és **async-signal-safe** (`man 7 signal-safety`): treballa amb el buffer de `stdout`, i si el senyal arriba a mig `printf` del programa principal el resultat no està definit. `write` és una crida al sistema directa i sí que és segura. `errno` es desa perquè `write` el pot modificar, i el handler pot haver interromput el programa just entre una crida que ha fallat i la consulta del seu `errno`.
+:::
+
+</details>
+
+---
+
+### Part F · Refactor
+
+Aquesta part no es fa a classe per manca de temps: la fas a casa, partint de la versió del programa complet que prefereixis. L'objectiu és **reordenar el codi** en funcions petites, amb noms descriptius i valors de retorn clars, perquè sigui més fàcil de llegir, mantenir i provar.
+
+::: {.exercici}
+Reorganitza el programa en aquestes funcions:
+
+- `int separa(char *s, const char *delims, char *v[], int max)`: trosseja `s` amb `strtok_r`, desa els tokens a `v` i retorna quants n'hi ha, o `-1` si n'hi ha més de `max`. Ha de servir per a **les dues** fases.
+- `int processa_linia(char *linia, int *estat)`: executa totes les comandes d'una línia i **retorna** `1` si cal sortir. Ha de substituir la variable `acabar`.
+- `int executa(char *argv[])` i `int espera_fill(pid_t pid)`: crear el fill i esperar-lo.
+- Si hi ha massa comandes o massa arguments, la shell ha d'**avisar** per `stderr`, no descartar-los en silenci.
+
+Després respon:
+
+1. Amb `strtok_r`, l'intent de la Part D (els dos bucles) funcionaria? Per què?
+2. Per què per als arguments cridem `separa(..., MAX_ARGS - 1)` i no `MAX_ARGS`?
+3. `espera_fill` fa `waitpid(pid, ...)` en lloc de `wait`. Ara mateix hi ha alguna diferència observable? Quan n'hi hauria?
+:::
+
+<details>
+<summary><b>Pots veure el raonament</b></summary>
+
+:::{.solucio}
+1. **Sí.** `strtok_r` no té estat intern: l'estat és el `saveptr` que li passem. Amb un `saveptr` per a les comandes i un altre per a les paraules, els dos bucles poden avançar  sense trepitjar-se. Amb les dues fases separades `strtok` ja funcionava; el que guanyem amb `strtok_r` és que `separa` és **reutilitzable** en qualsevol context, sense dependre de l'ordre de les crides.
+2. Per deixar lloc al `NULL` final que `execvp` necessita (`argv[nargs] = NULL`), com a la Part C.
+3. Ara no: la shell només té un fill viu alhora, i `wait` recull precisament aquest. Si algun dia hi ha processos en segon pla, `wait` podria recollir el fill **equivocat**; `waitpid(pid, ...)` espera exactament el que acabem de crear.
+
+Una proposta (n'hi ha altres de vàlides), en les dues versions de senyals:
+
+:::::{.panel-tabset}
+
+##### `signal` (simple)
+
+```{.c}
+#include <signal.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <unistd.h>
+
+#define ACABAR(s) (strcmp((s), "q") == 0)
+#define MAX_CMDS 8
+#define MAX_ARGS 64
+
+int separa(char *s, const char *delims, char *v[], int max);
+int processa_linia(char *linia, int *estat);
+int executa(char *argv[]);
+int espera_fill(pid_t pid);
+
+int main(void)
+{
+    char *linia = NULL;
+    size_t cap = 0;
+    int estat = 0;
+
+    if (signal(SIGINT, SIG_IGN) == SIG_ERR || signal(SIGTSTP, SIG_IGN) == SIG_ERR) {
+        perror("signal");
+        return 1;
+    }
+
+    while (1) {
+        printf("[%d]> ", estat);
+        fflush(stdout);
+
+        if (getline(&linia, &cap, stdin) < 0) {
+            putchar('\n');
+            break;
+        }
+
+        linia[strcspn(linia, "\n")] = '\0';
+
+        if (processa_linia(linia, &estat)) {
+            break;
+        }
+    }
+
+    free(linia);
+
+    return 0;
+}
+
+int processa_linia(char *linia, int *estat)
+{
+    char *comandes[MAX_CMDS];
+    int ncomandes = separa(linia, ";", comandes, MAX_CMDS);
+
+    if (ncomandes < 0) {
+        fprintf(stderr, "shell: massa comandes (màxim %d)\n", MAX_CMDS);
+        return 0;
+    }
+
+    for (int i = 0; i < ncomandes; i++) {
+        char *argv[MAX_ARGS];
+        int nargs = separa(comandes[i], " \t", argv, MAX_ARGS - 1);
+
+        if (nargs < 0) {
+            fprintf(stderr, "shell: massa arguments (màxim %d)\n", MAX_ARGS - 1);
+            continue;
+        }
+
+        if (nargs == 0) {
+            continue;
+        }
+
+        argv[nargs] = NULL;
+
+        if (ACABAR(argv[0])) {
+            return 1;
+        }
+
+        *estat = executa(argv);
+    }
+
+    return 0;
+}
+
+int separa(char *s, const char *delims, char *v[], int max)
+{
+    char *saveptr;
+    int n = 0;
+
+    for (char *tok = strtok_r(s, delims, &saveptr);
+         tok != NULL;
+         tok = strtok_r(NULL, delims, &saveptr)) {
+        if (n == max) {
+            return -1;
+        }
+
+        v[n++] = tok;
+    }
+
+    return n;
+}
+
+int executa(char *argv[])
+{
+    pid_t pid = fork();
+
+    if (pid < 0) {
+        perror("fork");
+        return -1;
+    }
+
+    if (pid == 0) {
+        if (signal(SIGINT, SIG_DFL) == SIG_ERR) {
+            perror("signal");
+            _exit(126);
+        }
+
+        execvp(argv[0], argv);
+        perror(argv[0]);
+        _exit(127);
+    }
+
+    return espera_fill(pid);
+}
+
+int espera_fill(pid_t pid)
+{
+    int status;
+
+    if (waitpid(pid, &status, 0) < 0) {
+        perror("waitpid");
+        return -1;
+    }
+
+    if (WIFEXITED(status)) {
+        return WEXITSTATUS(status);
+    }
+
+    int sig = WTERMSIG(status);
+
+    fprintf(stderr, "%s\n", strsignal(sig));
+
+    return 128 + sig;
+}
+```
+
+##### `sigaction` (ben feta)
+
+```{.c}
+#include <errno.h>
+#include <signal.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <unistd.h>
+
+#define ACABAR(s) (strcmp((s), "q") == 0)
+#define MAX_CMDS 8
+#define MAX_ARGS 64
+
+int separa(char *s, const char *delims, char *v[], int max);
+int processa_linia(char *linia, int *estat);
+int executa(char *argv[]);
+int espera_fill(pid_t pid);
+
+static void gestor_sigint(int signum)
+{
+    int errno_guardat = errno;
+
+    (void)signum;
+    write(STDOUT_FILENO, "\n", 1);
+    errno = errno_guardat;
+}
+
+static int posa_senyal(int signum, void (*gestor)(int))
+{
+    struct sigaction sa;
+
+    memset(&sa, 0, sizeof sa);
+    sa.sa_handler = gestor;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = SA_RESTART;
+
+    if (sigaction(signum, &sa, NULL) < 0) {
+        perror("sigaction");
+        return -1;
+    }
+
+    return 0;
+}
+
+int main(void)
+{
+    char *linia = NULL;
+    size_t cap = 0;
+    int estat = 0;
+
+    if (posa_senyal(SIGINT, gestor_sigint) < 0 || posa_senyal(SIGTSTP, SIG_IGN) < 0) {
+        return 1;
+    }
+
+    while (1) {
+        printf("[%d]> ", estat);
+        fflush(stdout);
+
+        if (getline(&linia, &cap, stdin) < 0) {
+            putchar('\n');
+            break;
+        }
+
+        linia[strcspn(linia, "\n")] = '\0';
+
+        if (processa_linia(linia, &estat)) {
+            break;
+        }
+    }
+
+    free(linia);
+
+    return 0;
+}
+
+int processa_linia(char *linia, int *estat)
+{
+    char *comandes[MAX_CMDS];
+    int ncomandes = separa(linia, ";", comandes, MAX_CMDS);
+
+    if (ncomandes < 0) {
+        fprintf(stderr, "shell: massa comandes (màxim %d)\n", MAX_CMDS);
+        return 0;
+    }
+
+    for (int i = 0; i < ncomandes; i++) {
+        char *argv[MAX_ARGS];
+        int nargs = separa(comandes[i], " \t", argv, MAX_ARGS - 1);
+
+        if (nargs < 0) {
+            fprintf(stderr, "shell: massa arguments (màxim %d)\n", MAX_ARGS - 1);
+            continue;
+        }
+
+        if (nargs == 0) {
+            continue;
+        }
+
+        argv[nargs] = NULL;
+
+        if (ACABAR(argv[0])) {
+            return 1;
+        }
+
+        *estat = executa(argv);
+    }
+
+    return 0;
+}
+
+int separa(char *s, const char *delims, char *v[], int max)
+{
+    char *saveptr;
+    int n = 0;
+
+    for (char *tok = strtok_r(s, delims, &saveptr);
+         tok != NULL;
+         tok = strtok_r(NULL, delims, &saveptr)) {
+        if (n == max) {
+            return -1;
+        }
+
+        v[n++] = tok;
+    }
+
+    return n;
+}
+
+int executa(char *argv[])
+{
+    pid_t pid = fork();
+
+    if (pid < 0) {
+        perror("fork");
+        return -1;
+    }
+
+    if (pid == 0) {
+        if (posa_senyal(SIGINT, SIG_DFL) < 0) {
+            _exit(126);
+        }
+
+        execvp(argv[0], argv);
+        perror(argv[0]);
+        _exit(127);
+    }
+
+    return espera_fill(pid);
+}
+
+int espera_fill(pid_t pid)
+{
+    int status;
+
+    if (waitpid(pid, &status, 0) < 0) {
+        perror("waitpid");
+        return -1;
+    }
+
+    if (WIFEXITED(status)) {
+        return WEXITSTATUS(status);
+    }
+
+    int sig = WTERMSIG(status);
+
+    fprintf(stderr, "%s\n", strsignal(sig));
+
+    return 128 + sig;
+}
+```
+
+:::::
+:::
+
+</details>

@@ -71,6 +71,7 @@ website:
               - href: blocs/02-proc/teoria/02-create.qmd
               - href: blocs/02-proc/teoria/03-signals.qmd
               - href: blocs/02-proc/teoria/04-pipes.qmd
+              - href: blocs/02-proc/teoria/05-fifos.qmd
             - section: "Activitats"
               contents:
               - href: blocs/02-proc/activitats/02-create.qmd
@@ -79,6 +80,7 @@ website:
             - section: "Pralabs"
               contents:
               - href: blocs/02-proc/pralabs/01_minishell.qmd
+              - href: blocs/02-proc/pralabs/02_minishell.qmd
     
 
 
