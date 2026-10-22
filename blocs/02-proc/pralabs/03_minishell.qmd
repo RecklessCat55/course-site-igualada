@@ -1,0 +1,584 @@
+---
+title: "Pralab 05 (III): shell: redireccions (`<`, `>`, `>>`)"
+author: "Jordi Mateo Fornés"
+format:
+  udl-course-html:
+    toc: false
+    number-sections: false
+---
+
+## Introducció
+
+Fins ara la shell llegeix una línia, la parteix en comandes amb `;`, executa cada comanda amb `fork` + `execvp` + `waitpid` i en recull el codi de sortida. Avui li ensenyem a **canviar d'on llegeix i on escriu** una comanda:
+
+- `ls > llista.txt` (la sortida va a un fitxer, que es buida primer);
+- `ls >> llista.txt` (la sortida s'afegeix al final);
+- `wc -l < llista.txt` (l'entrada ve d'un fitxer).
+
+> **Com pot la shell fer que `ls` escrigui en un fitxer, si `ls` no sap res de fitxers?**
+
+:::{.bonapractica}
+**Llegeix el `man` abans de cridar.** Funcions noves d'avui: `open`, `close`, `dup2`. Mira també `man 2 open`, apartat sobre `O_CREAT`, `O_TRUNC` i `O_APPEND`.
+:::
+
+
+Aquest és el codi de la Part F de la sessió passada, en la versió `sigaction`. **Si no has acabat el refactor, parteix d'aquí: és la solució.** Si vas triar la versió `signal`, tot el que fem avui funciona igual.
+
+
+### Part G — Redireccions (`<`, `>`, `>>`)
+
+#### G.1 — Descriptors de fitxer i `dup2`
+
+Quan `ls` escriu amb `write(1, ...)`, no sap què hi ha darrere aquell `1`. Cada procés té una **taula de descriptors de fitxer**: un enter (`0`, `1`, `2`, `3`...) per cada fitxer obert. Els tres primers són, per convenció, l'entrada, la sortida i l'error estàndard, i **tots els programes** hi llegeixen i hi escriuen sense preguntar si hi ha un terminal, un fitxer o un pipe.
+
+```{.text}
+   `ls` normal                       `ls` després d'un dup2
+
+   fd 0 --> /dev/pts/0  (teclat)     fd 0 --> /dev/pts/0
+   fd 1 --> /dev/pts/0  (pantalla)   fd 1 --> sortida.txt
+   fd 2 --> /dev/pts/0  (pantalla)   fd 2 --> /dev/pts/0
+```
+
+:::{.concepte title="Tres fets que ho expliquen"}
+1. `open` retorna el **número més petit que estigui lliure** a la taula.
+2. `dup2(vell, nou)` fa que `nou` apunti al **mateix fitxer obert** que `vell` (si `nou` ja era obert, el tanca abans) i retorna `nou`.
+3. `fork` **copia** la taula i `execvp` la **conserva**.
+
+Conseqüència: una redirecció és un `open` + `dup2` que fa **el fill**, entre el `fork` i l'`execvp`.
+:::
+
+
+#### G.2 — Els indicadors d'`open`
+
+Cada operador obre el fitxer d'una manera diferent:
+
+- `<`: `O_RDONLY`
+- `>`: `O_WRONLY | O_CREAT | O_TRUNC`
+- `>>`: `O_WRONLY | O_CREAT | O_APPEND`
+
+#### G.3 — Analitzar les redireccions
+
+Fins ara una comanda era només un `argv`. Ara en té tres coses: els arguments, el fitxer d'entrada i el de sortida (amb el mode `>` o `>>`). Una funció no pot retornar tot això amb un sol `int`, així que ho agrupem en un `struct`. A la sessió vinent, cada comanda d'un pipeline en tindrà un; per això l'anomenem **etapa**:
+
+```{.c}
+struct etapa {
+    char *argv[MAX_ARGS];   /* acabat en NULL, sense operadors de redirecció */
+    char *entrada;          /* fitxer de '<', o NULL */
+    char *sortida;          /* fitxer de '>' o '>>', o NULL */
+    int afegir;             /* 1 si és '>>' */
+};
+```
+
+```{.c}
+static int es_operador(const char *s)
+{
+    return strcmp(s, "<") == 0 || strcmp(s, ">") == 0 || strcmp(s, ">>") == 0;
+}
+```
+
+```{.c}
+static int extreu_redireccions(struct etapa *e)
+{
+    int j = 0;
+
+    e->entrada = NULL;
+    e->sortida = NULL;
+    e->afegir = 0;
+
+    for (int i = 0; e->argv[i] != NULL; i++) {
+        char *op = e->argv[i];
+
+        if (!es_operador(op)) {
+            e->argv[j++] = op;
+            continue;
+        }
+
+        char *fitxer = e->argv[i + 1];
+
+        if (fitxer == NULL || es_operador(fitxer)) {
+            fprintf(stderr, "shell: falta el fitxer després de '%s'\n", op);
+            return -1;
+        }
+
+        if (strcmp(op, "<") == 0) {
+            e->entrada = fitxer;
+        } else {
+            e->sortida = fitxer;
+            e->afegir = (strcmp(op, ">>") == 0);
+        }
+
+        i++;
+    }
+
+    e->argv[j] = NULL;
+
+    return 0;
+}
+```
+
+`analitza_etapa` junta els dos passos que ja teníem (trossejar en paraules) i el nou (treure les redireccions):
+
+```{.c}
+int analitza_etapa(char *text, struct etapa *e)
+{
+    int n = separa(text, " \t", e->argv, MAX_ARGS - 1);
+
+    if (n < 0) {
+        fprintf(stderr, "shell: massa arguments (màxim %d)\n", MAX_ARGS - 1);
+        return -1;
+    }
+
+    e->argv[n] = NULL;
+
+    return extreu_redireccions(e);
+}
+```
+
+::: {.exercici}
+1. Per què cal **treure** l'operador i el nom del fitxer de `argv`? Què faria `ls > f` si els deixéssim?
+2. `ls -l > f`, `ls > f -l` i `> f ls -l`: fan el mateix?
+3. Per què es comprova `es_operador(fitxer)`? Què passaria amb `echo x > >` sense la comprovació?
+4. Escriu `ls>f` (sense espais). Què passa? Per què?
+:::
+
+<details>
+<summary><b>Pots veure el raonament</b></summary>
+
+:::{.solucio}
+1. `ls` rebria `>` i `f` com a **noms de fitxer a llistar** i es queixaria que no existeixen. L'operador és cosa de la shell: el programa no l'ha de veure mai.
+2. **Sí, els tres**: l'operador pot anar a qualsevol lloc de la comanda, i la funció el treu igualment. És el mateix que fa una shell de debò.
+3. Sense la comprovació, `echo x > >` agafaria el segon `>` com a nom de fitxer i crearia un fitxer que es diu `>`. Amb la comprovació surt `shell: falta el fitxer després de '>'`.
+4. `ls>f` és **una sola paraula** per a `strtok_r` (només separa per espai i tabulador), així que s'intenta executar un programa que es diu `ls>f`: `ls>f: No such file or directory`. Les shells de debò reconeixen els operadors encara que no hi hagi espais; ho deixem com a límit (Part H).
+:::
+
+</details>
+
+#### G.4 — Aplicar-les al fill
+
+Tres funcions petites, de baix a dalt:
+
+```{.c}
+static int mou_fd(int origen, int desti)
+{
+    if (origen == desti) {
+        return 0;
+    }
+
+    if (dup2(origen, desti) < 0) {
+        perror("dup2");
+        return -1;
+    }
+
+    close(origen);
+
+    return 0;
+}
+```
+
+```{.c}
+static int redirigeix(const char *fitxer, int flags, int desti)
+{
+    int fd = open(fitxer, flags, 0644);
+
+    if (fd < 0) {
+        perror(fitxer);
+        return -1;
+    }
+
+    return mou_fd(fd, desti);
+}
+```
+
+```{.c}
+static int aplica_redireccions(const char *entrada, const char *sortida, int afegir)
+{
+    if (entrada != NULL && redirigeix(entrada, O_RDONLY, STDIN_FILENO) < 0) {
+        return -1;
+    }
+
+    if (sortida != NULL) {
+        int flags = O_WRONLY | O_CREAT | (afegir ? O_APPEND : O_TRUNC);
+
+        if (redirigeix(sortida, flags, STDOUT_FILENO) < 0) {
+            return -1;
+        }
+    }
+
+    return 0;
+}
+```
+
+Ara `processa_linia` analitza una etapa (la comanda sencera) en lloc d'un `argv` solt, i passa el `struct` a `executa`:
+
+```{.c}
+int processa_linia(char *linia, int *estat)
+{
+    char *comandes[MAX_CMDS];
+    int ncomandes = separa(linia, ";", comandes, MAX_CMDS);
+
+    if (ncomandes < 0) {
+        fprintf(stderr, "shell: massa comandes (màxim %d)\n", MAX_CMDS);
+        return 0;
+    }
+
+    for (int i = 0; i < ncomandes; i++) {
+        struct etapa e;
+
+        if (analitza_etapa(comandes[i], &e) < 0) {
+            continue;
+        }
+
+        if (e.argv[0] == NULL) {
+            continue;
+        }
+
+        if (ACABAR(e.argv[0])) {
+            return 1;
+        }
+
+        *estat = executa(&e);
+    }
+
+    return 0;
+}
+```
+
+I `executa` aplica les redireccions al fill, **després dels senyals i abans de l'`execvp`**. Canvia el prototipus a `int executa(const struct etapa *e,);` i afegeix el de `analitza_etapa`:
+
+```{.c}
+int executa(const struct etapa *e)
+{
+    pid_t pid = fork();
+
+    if (pid < 0) {
+        perror("fork");
+        return -1;
+    }
+
+    if (pid == 0) {
+        if (posa_senyal(SIGINT, SIG_DFL) < 0) {
+            _exit(126);
+        }
+
+        if (aplica_redireccions(e->entrada, e->sortida, e->afegir) < 0) {
+            _exit(1);
+        }
+
+        execvp(e->argv[0], e->argv);
+        perror(e->argv[0]);
+        _exit(127);
+    }
+
+    return espera_fill(pid);
+}
+```
+
+Prova-ho:
+
+```{.text}
+[0]> echo hola > a.txt
+[0]> echo adeu >> a.txt
+[0]> cat < a.txt
+hola
+adeu
+[0]> wc -l < a.txt
+2
+```
+
+Fixa't en els detalls (cadascun és una decisió que s'ha pres llegint el `man`):
+
+| Detall | Per què |
+|--------|---------|
+| Redirigim al **fill**, mai al pare | Un `dup2` al pare canviaria els descriptors **de la shell**: el prompt i totes les comandes següents anirien al fitxer. |
+| `close(fd)` a `mou_fd`, després del `dup2` | Si no, el programa nou hereta un descriptor extra (G.1). |
+| `if (origen == desti) return 0` | `dup2(fd, fd)` no fa res, i el `close` següent tancaria just el descriptor que acabem de deixar a punt. Passa de debò si la shell s'ha arrencat amb la sortida tancada (`./shell >&-`): `open` retorna `1`, el primer lliure. |
+| `_exit(1)` si falla la redirecció | Com amb `execvp` (B.4 de la primera sessió): el fill **no pot** continuar executant el codi de la shell. L'1 és el codi habitual d'«error de la comanda». |
+| `perror(fitxer)` | El missatge diu **quin fitxer** ha fallat: `no_existeix: No such file or directory`. |
+
+
+### Part H — La shell amb redireccions
+
+Aquest és el programa que hem construït, **net i ordenat**. Només hi ha la versió `sigaction` de la gestió de senyals.
+
+```{.c}
+#include <errno.h>
+#include <fcntl.h>
+#include <signal.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <unistd.h>
+
+#define ACABAR(s) (strcmp((s), "q") == 0)
+#define MAX_CMDS 8
+#define MAX_ARGS 64
+
+struct etapa {
+    char *argv[MAX_ARGS];   /* acabat en NULL, sense operadors de redirecció */
+    char *entrada;          /* fitxer de '<', o NULL */
+    char *sortida;          /* fitxer de '>' o '>>', o NULL */
+    int afegir;             /* 1 si és '>>' */
+};
+
+int separa(char *s, const char *delims, char *v[], int max);
+int analitza_etapa(char *text, struct etapa *e);
+int processa_linia(char *linia, int *estat);
+int executa(const struct etapa *e);
+int espera_fill(pid_t pid);
+
+static void gestor_sigint(int signum)
+{
+    int errno_guardat = errno;
+
+    (void)signum;
+    write(STDOUT_FILENO, "\n", 1);
+    errno = errno_guardat;
+}
+
+static int posa_senyal(int signum, void (*gestor)(int))
+{
+    struct sigaction sa;
+
+    memset(&sa, 0, sizeof sa);
+    sa.sa_handler = gestor;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = SA_RESTART;
+
+    if (sigaction(signum, &sa, NULL) < 0) {
+        perror("sigaction");
+        return -1;
+    }
+
+    return 0;
+}
+
+static int es_operador(const char *s)
+{
+    return strcmp(s, "<") == 0 || strcmp(s, ">") == 0 || strcmp(s, ">>") == 0;
+}
+
+static int extreu_redireccions(struct etapa *e)
+{
+    int j = 0;
+
+    e->entrada = NULL;
+    e->sortida = NULL;
+    e->afegir = 0;
+
+    for (int i = 0; e->argv[i] != NULL; i++) {
+        char *op = e->argv[i];
+
+        if (!es_operador(op)) {
+            e->argv[j++] = op;
+            continue;
+        }
+
+        char *fitxer = e->argv[i + 1];
+
+        if (fitxer == NULL || es_operador(fitxer)) {
+            fprintf(stderr, "shell: falta el fitxer després de '%s'\n", op);
+            return -1;
+        }
+
+        if (strcmp(op, "<") == 0) {
+            e->entrada = fitxer;
+        } else {
+            e->sortida = fitxer;
+            e->afegir = (strcmp(op, ">>") == 0);
+        }
+
+        i++;
+    }
+
+    e->argv[j] = NULL;
+
+    return 0;
+}
+
+static int mou_fd(int origen, int desti)
+{
+    if (origen == desti) {
+        return 0;
+    }
+
+    if (dup2(origen, desti) < 0) {
+        perror("dup2");
+        return -1;
+    }
+
+    close(origen);
+
+    return 0;
+}
+
+static int redirigeix(const char *fitxer, int flags, int desti)
+{
+    int fd = open(fitxer, flags, 0644);
+
+    if (fd < 0) {
+        perror(fitxer);
+        return -1;
+    }
+
+    return mou_fd(fd, desti);
+}
+
+static int aplica_redireccions(const char *entrada, const char *sortida, int afegir)
+{
+    if (entrada != NULL && redirigeix(entrada, O_RDONLY, STDIN_FILENO) < 0) {
+        return -1;
+    }
+
+    if (sortida != NULL) {
+        int flags = O_WRONLY | O_CREAT | (afegir ? O_APPEND : O_TRUNC);
+
+        if (redirigeix(sortida, flags, STDOUT_FILENO) < 0) {
+            return -1;
+        }
+    }
+
+    return 0;
+}
+
+int main(void)
+{
+    char *linia = NULL;
+    size_t cap = 0;
+    int estat = 0;
+
+    if (posa_senyal(SIGINT, gestor_sigint) < 0 || posa_senyal(SIGTSTP, SIG_IGN) < 0) {
+        return 1;
+    }
+
+    while (1) {
+        printf("[%d]> ", estat);
+        fflush(stdout);
+
+        if (getline(&linia, &cap, stdin) < 0) {
+            putchar('\n');
+            break;
+        }
+
+        linia[strcspn(linia, "\n")] = '\0';
+
+        if (processa_linia(linia, &estat)) {
+            break;
+        }
+    }
+
+    free(linia);
+
+    return 0;
+}
+
+int processa_linia(char *linia, int *estat)
+{
+    char *comandes[MAX_CMDS];
+    int ncomandes = separa(linia, ";", comandes, MAX_CMDS);
+
+    if (ncomandes < 0) {
+        fprintf(stderr, "shell: massa comandes (màxim %d)\n", MAX_CMDS);
+        return 0;
+    }
+
+    for (int i = 0; i < ncomandes; i++) {
+        struct etapa e;
+
+        if (analitza_etapa(comandes[i], &e) < 0) {
+            continue;
+        }
+
+        if (e.argv[0] == NULL) {
+            continue;
+        }
+
+        if (ACABAR(e.argv[0])) {
+            return 1;
+        }
+
+        *estat = executa(&e);
+    }
+
+    return 0;
+}
+
+int analitza_etapa(char *text, struct etapa *e)
+{
+    int n = separa(text, " \t", e->argv, MAX_ARGS - 1);
+
+    if (n < 0) {
+        fprintf(stderr, "shell: massa arguments (màxim %d)\n", MAX_ARGS - 1);
+        return -1;
+    }
+
+    e->argv[n] = NULL;
+
+    return extreu_redireccions(e);
+}
+
+int separa(char *s, const char *delims, char *v[], int max)
+{
+    char *saveptr;
+    int n = 0;
+
+    for (char *tok = strtok_r(s, delims, &saveptr);
+         tok != NULL;
+         tok = strtok_r(NULL, delims, &saveptr)) {
+        if (n == max) {
+            return -1;
+        }
+
+        v[n++] = tok;
+    }
+
+    return n;
+}
+
+int executa(const struct etapa *e)
+{
+    pid_t pid = fork();
+
+    if (pid < 0) {
+        perror("fork");
+        return -1;
+    }
+
+    if (pid == 0) {
+        if (posa_senyal(SIGINT, SIG_DFL) < 0) {
+            _exit(126);
+        }
+
+        if (aplica_redireccions(e->entrada, e->sortida, e->afegir) < 0) {
+            _exit(1);
+        }
+
+        execvp(e->argv[0], e->argv);
+        perror(e->argv[0]);
+        _exit(127);
+    }
+
+    return espera_fill(pid);
+}
+
+int espera_fill(pid_t pid)
+{
+    int status;
+
+    if (waitpid(pid, &status, 0) < 0) {
+        perror("waitpid");
+        return -1;
+    }
+
+    if (WIFEXITED(status)) {
+        return WEXITSTATUS(status);
+    }
+
+    int sig = WTERMSIG(status);
+
+    fprintf(stderr, "%s\n", strsignal(sig));
+
+    return 128 + sig;
+}
+```

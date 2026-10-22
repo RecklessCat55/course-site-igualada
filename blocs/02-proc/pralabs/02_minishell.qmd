@@ -223,10 +223,9 @@ while (cmd != NULL) {
 }
 ```
 
-i `strtok` ens serveix per partir en paraules, també ens servirà per partir en comandes: primer pel `;`, i després cada comanda per espais. 
+
 
 ```{.c}
-/* Intent ingenu: substitueix el bucle de C.3 per aquest */
 char *cmd = strtok(linia, ";");
 
 while (cmd != NULL) {
@@ -251,7 +250,7 @@ while (cmd != NULL) {
 ```
 
 ::: {.exercici}
-**Prediu abans de provar.** Amb la línia `ls -l ; pwd`, quines comandes s'executen? Dóna't una pista: rellegeix el `.concepte` de C.2 (*una sola variable*) i pensa què fa `strtok(NULL, ...)` just després que el bucle intern hagi acabat.
+**Prediu abans de provar.** Amb la línia `ls -l ; pwd`, quines comandes s'executen?
 :::
 
 <details>

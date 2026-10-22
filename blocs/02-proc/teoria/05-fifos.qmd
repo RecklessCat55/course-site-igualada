@@ -26,7 +26,9 @@ format:
 -   `pipe(fd)` retorna **dos descriptors**, però la pipe **no té cap nom** al sistema de fitxers.
 -   L'única manera d'obtenir aquests descriptors és **heretar-los**: un ancestre comú crida `pipe()` *abans* de `fork()`.
 
-> **Dos programes llançats des de **dues terminals diferents** no poden compartir una pipe sense nom.
+:::{.fragment}
+> Dos programes llançats des de **dues terminals diferents** no poden compartir una pipe sense nom.
+:::
 
 
 ## Què és una FIFO?
@@ -92,11 +94,13 @@ RETORNA:  0 si té èxit
 -   `mkfifo()` **no obre** la FIFO: només crea l'*inode*. Cal un `open()` posterior.
 -   El patró habitual és tolerar `EEXIST`:
 
+:::{.fragment}
 ``` {.c code-line-numbers="false" }
 if (mkfifo("/tmp/canal", 0600) == -1 && errno != EEXIST) {
     perror("mkfifo"); exit(EXIT_FAILURE);
 }
 ```
+:::
 
 ## Cicle de vida: el nom i les dades són independents
 
@@ -154,20 +158,13 @@ sequenceDiagram
 -   Escriptures de **com a molt `PIPE_BUF` bytes** són **atòmiques**: no s'intercalen amb les d'altres escriptors. A Linux `PIPE_BUF` = 4096 (POSIX garanteix com a mínim 512).
 -   La **capacitat** (64 KiB per defecte a Linux) és una cosa diferent de `PIPE_BUF`; es consulta amb `fcntl(fd, F_GETPIPE_SZ)`.
 
-::: {.errorcomu}
+::: {.errorcomu .fragment}
 Una FIFO és un **flux de bytes**: no conserva diferències entre missatges. Dos `write()` de 4 bytes poden arribar en un sol `read()` de 8. I el que llegeix `read()` **no acaba en `'\0'`**.
 :::
 
 ## Exemple: escriptor independent
 
-``` {.c code-line-numbers="false" }
-#include <errno.h>
-#include <fcntl.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <sys/stat.h>
-#include <unistd.h>
-
+``` {.c code-line-numbers="false"  }
 #define FIFO "/tmp/myfifo"
 
 int main(void) {
@@ -190,15 +187,7 @@ int main(void) {
 ## Exemple: lector independent
 
 ``` {.c code-line-numbers="false" }
-#include <errno.h>
-#include <fcntl.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <sys/stat.h>
-#include <unistd.h>
-
 #define FIFO "/tmp/myfifo"
-
 int main(void) {
     if (mkfifo(FIFO, 0600) == -1 && errno != EEXIST) { perror("mkfifo"); exit(EXIT_FAILURE); }
 
@@ -233,7 +222,7 @@ missatge 2
 -   No hi ha cap `fork()`: els dos processos **no tenen cap relació** de parentiu.
 -   Què passa si engeguem **dos** escriptors alhora? I **dos** lectors?
 
-::: {.reflexio}
+::: {.reflexio .fragment}
 1. Amb dos lectors, cada byte el llegeix **només un** d'ells: una FIFO no fa difusió (*broadcast*). Qui rep cada missatge depèn de la planificació. 
 2. Amb dos escriptors, les escriptures de **mida ≤ `PIPE_BUF`** arriben **senceres** i sense intercalació. Si escrivim més de `PIPE_BUF`, el nucli pot intercalar bytes d'ambdós escriptors.
 :::
@@ -249,6 +238,7 @@ missatge 2
 -   Permisos restrictius (`0600`) i camins dins d'un directori propi, no directament a `/tmp` compartit.
 -   Obrir les FIFO en un **ordre global** consistent entre tots els processos.
 :::
+
 
 
 

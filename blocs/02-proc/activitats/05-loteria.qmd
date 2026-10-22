@@ -1,0 +1,908 @@
+---
+title: Exercici progressiu basat en un generador de bitllets de loteria
+description: Exercici progressiu per practicar la creació de processos, pipes i senyals.
+lang: ca
+---
+
+::: {.exercici}
+**Generador concurrent de bitllets de loteria.**
+
+Volem construir un programa `loteria.c` que crea **N processos fills**. Cada fill genera un únic número aleatori entre `1` i `49`, i el pare recull els `N` números per formar un bitllet de `N` nombres.
+
+Per simplificar les primeres etapes, no cal evitar que dos fills generin el mateix número. En la darrera etapa ampliarem el programa perquè el bitllet contingui números diferents.
+
+Treballarem amb dos programes:
+
+- `loteria.c`: procés pare. Crea els fills, gestiona les pipes i mostra el bitllet.
+- `generador.c`: programa executat per cada fill. Genera un número i el comunica segons el mecanisme de l'etapa.
+
+Farem servir `N = 6` com a valor per defecte, però el programa ha de permetre canviar-lo fàcilment.
+:::
+
+## Comunicar un número amb `exit()` i `waitpid()`
+
+::: {.exercici}
+Fes que `loteria.c` creï N fills. Cada fill ha d'executar el programa `generador`, que retorna el número generat mitjançant el seu codi de sortida. El pare ha de recuperar el valor amb `waitpid()` i `WEXITSTATUS()` i mostrar els números recollits.
+
+**Preguntes**
+
+1. Quin rang de valors pot retornar un procés mitjançant el codi de sortida?
+2. Per què aquesta tècnica no és adequada per transmetre un bitllet complet?
+3. En quin ordre arriben els resultats al pare?
+   
+:::
+
+<details>
+<summary><b>Mostra la solució</b></summary>
+
+::: {.solucio}
+### `generador.c`
+
+```c
+#include <stdio.h>
+#include <stdlib.h>
+#include <time.h>
+#include <unistd.h>
+
+int main(void)
+{
+    // srand(getpid()); // ens dóna sempre el mateix número si es crida molt ràpidament
+    // Per obtenir números diferents, combinem el temps i el PID.
+    srand((unsigned int) time(NULL) ^ (unsigned int) getpid());
+    // de 1 a 49
+    int numero = 1 + rand() % 49;
+    // de 0 a 48 -> int numero = rand() % 49;
+    return numero; 
+}
+```
+
+### `loteria.c`
+
+```c
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+
+#define N 6
+
+int main(void)
+{
+    pid_t fills[N];
+    int numeros[N];
+
+    for (int i = 0; i < N; i++) {
+        pid_t pid = fork();
+
+        if (pid == -1) {
+            perror("fork");
+            exit(EXIT_FAILURE);
+        }
+
+        if (pid == 0) {
+            execl("./generador", "generador", (char *) NULL);
+            perror("execl");
+            _exit(127);
+        }
+
+        fills[i] = pid;
+    }
+
+    for (int i = 0; i < N; i++) {
+        int estat;
+
+        if (waitpid(fills[i], &estat, 0) == -1) {
+            perror("waitpid");
+            exit(EXIT_FAILURE);
+        }
+
+        if (WIFEXITED(estat)) {
+            numeros[i] = WEXITSTATUS(estat);
+        } else {
+            fprintf(stderr, "El fill %d no ha acabat normalment\n", i);
+            numeros[i] = -1;
+        }
+    }
+
+    printf("Bitllet:");
+    for (int i = 0; i < N; i++)
+        printf(" %d", numeros[i]);
+    printf("\n");
+
+    return 0;
+}
+```
+
+### Compilació i execució
+
+```bash
+gcc -Wall -Wextra -o generador generador.c
+gcc -Wall -Wextra -o loteria loteria.c
+./loteria
+```
+
+**Explicació.** `execl()` substitueix el programa del fill pel programa `generador`. El pare conserva el PID retornat per `fork()` i recupera el codi de sortida amb `waitpid()`. Esperar els PID en l'ordre de creació fa que el pare reculli els resultats en aquest mateix ordre, però no implica que els fills hagin acabat en aquest ordre. El codi de sortida només permet transportar un valor petit (8 bits útils). 
+:::
+</details>
+
+## Una pipe comuna: el fill escriu a un descriptor explícit
+
+::: {.exercici}
+Modifica els dos programes perquè el pare creï **una sola pipe compartida**. Cada fill ha d'enviar el número generat amb `write()`. El pare llegirà N números amb `read()`.
+
+En aquesta versió, el pare passa al programa `generador` el número del descriptor d'escriptura com a argument.
+
+**Preguntes**
+
+1. Per què cal tancar l'extrem de lectura en els fills i l'extrem d'escriptura al pare?
+2. Poden escriure dos fills alhora?
+3. Per què el pare ha de llegir exactament N números?
+   
+:::
+
+<details>
+<summary><b>Mostra la solució</b></summary>
+
+::: {.solucio}
+### `generador.c`
+
+```c
+#include <stdio.h>
+#include <stdlib.h>
+#include <time.h>
+#include <unistd.h>
+
+int main()
+{
+
+    srand((unsigned int) time(NULL) ^ (unsigned int) getpid());
+    int numero = 1 + rand() % 49;
+    int fd = 4;
+
+    if (write(fd, &numero, sizeof numero) != sizeof numero) {
+        perror("write");
+        close(fd);
+        return 1;
+    }
+
+    close(fd);
+    return 0;
+}
+```
+
+### `loteria.c`
+
+```c
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+
+#define N 6
+
+int main(void)
+{
+    int p[2];
+    pid_t fills[N];
+    int numeros[N];
+
+    if (pipe(p) == -1) {
+        perror("pipe");
+        exit(EXIT_FAILURE);
+    }
+
+    for (int i = 0; i < N; i++) {
+        pid_t pid = fork();
+
+        if (pid == -1) {
+            perror("fork");
+            exit(EXIT_FAILURE);
+        }
+
+        if (pid == 0) {
+            close(p[0]);
+            execl("./generador", "generador", (char *) NULL);
+            perror("execl");
+            _exit(127);
+        }
+
+        fills[i] = pid;
+    }
+
+    close(p[1]);
+
+    for (int i = 0; i < N; i++) {
+        ssize_t n = read(p[0], &numeros[i], sizeof numeros[i]);
+
+        if (n != sizeof numeros[i]) {
+            fprintf(stderr, "No s'ha pogut llegir el número %d\n", i);
+            close(p[0]);
+            exit(EXIT_FAILURE);
+        }
+    }
+
+    close(p[0]);
+
+    for (int i = 0; i < N; i++)
+        waitpid(fills[i], NULL, 0);
+
+    printf("Bitllet:");
+    for (int i = 0; i < N; i++)
+        printf(" %d", numeros[i]);
+    printf("\n");
+
+    return 0;
+}
+```
+
+### Compilació i execució
+
+```bash
+gcc -Wall -Wextra -o generador generador.c
+gcc -Wall -Wextra -o loteria loteria.c
+./loteria
+```
+
+**Explicació.** La pipe és creada abans de `fork()`, de manera que els fills hereten els descriptors. El pare tanca l'extrem d'escriptura abans de llegir; si el mantingués obert, no podria detectar l'EOF quan tots els escriptors reals haguessin tancat.
+
+En aquesta versió cada escriptura transmet un `int`. Per a aquest missatge petit, una escriptura de mida inferior a `PIPE_BUF` no s'intercala amb l'escriptura d'un altre procés. Tot i això, `read()` pot retornar menys bytes dels demanats en una lectura general; aquí s'utilitza una lectura simple. En un codi robust cal implementar una funció de lectura completa.
+:::
+</details>
+
+## Una pipe comuna, però el generador només escriu a `stdout`
+
+::: {.exercici}
+Simplifica `generador.c`: el generador no ha de saber quin descriptor de pipe s'utilitza. El pare ha de redirigir la sortida estàndard del fill cap a la pipe amb `dup2()` abans d'executar `generador`.
+
+El generador només ha de mostrar el número per la sortida estàndard. Per evitar problemes de format, cada fill enviarà el número seguit d'un salt de línia.
+
+**Repte:** quina part de la gestió de la comunicació desapareix del generador?
+:::
+
+<details>
+<summary><b>Mostra la solució</b></summary>
+
+::: {.solucio}
+### `generador.c`
+
+```c
+#include <stdio.h>
+#include <stdlib.h>
+#include <time.h>
+#include <unistd.h>
+
+int main(void)
+{
+    srand((unsigned int) time(NULL) ^ (unsigned int) getpid());
+    int numero = 1 + rand() % 49;
+
+    printf("%d\n", numero);
+    return 0;
+}
+```
+
+### `loteria.c`
+
+```c
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+
+#define N 6
+
+int main(void)
+{
+    int p[2];
+    pid_t fills[N];
+    int numeros[N];
+
+    if (pipe(p) == -1) {
+        perror("pipe");
+        exit(EXIT_FAILURE);
+    }
+
+    for (int i = 0; i < N; i++) {
+        pid_t pid = fork();
+
+        if (pid == -1) {
+            perror("fork");
+            exit(EXIT_FAILURE);
+        }
+
+        if (pid == 0) {
+            close(p[0]);
+
+            // podeu utilitzar STDOUT_FILENO en lloc de 1
+            if (dup2(p[1], 1) == -1) {
+                perror("dup2");
+                _exit(1);
+            }
+            close(p[1]);
+
+            execl("./generador", "generador", (char *) NULL);
+            perror("execl");
+            _exit(127);
+        }
+
+        fills[i] = pid;
+    }
+
+    close(p[1]);
+
+    FILE *entrada = fdopen(p[0], "r");
+    if (entrada == NULL) {
+        perror("fdopen");
+        exit(EXIT_FAILURE);
+    }
+
+    for (int i = 0; i < N; i++) {
+        if (fscanf(entrada, "%d", &numeros[i]) != 1) {
+            fprintf(stderr, "No s'ha pogut llegir el número %d\n", i);
+            fclose(entrada);
+            exit(EXIT_FAILURE);
+        }
+    }
+
+    fclose(entrada);
+
+    for (int i = 0; i < N; i++)
+        waitpid(fills[i], NULL, 0);
+
+    printf("Bitllet:");
+    for (int i = 0; i < N; i++)
+        printf(" %d", numeros[i]);
+    printf("\n");
+
+    return 0;
+}
+```
+
+### Compilació i execució
+
+```bash
+gcc -Wall -Wextra -o generador generador.c
+gcc -Wall -Wextra -o loteria loteria.c
+./loteria
+```
+
+**Explicació.** `dup2(p[1], 1)` fa que la sortida estàndard del fill apunti a la pipe. Després d'aquesta redirecció, `generador.c` no necessita conèixer ni gestionar cap descriptor de pipe: es limita a escriure a la sortida estàndard. `fdopen()` permet al pare llegir la pipe amb les funcions habituals de la biblioteca d'entrada/sortida.
+
+Aquesta tècnica és útil quan un programa existent ja escriu resultats per `stdout` i volem connectar-lo a un altre procés sense modificar-ne la lògica.
+:::
+</details>
+
+## Una pipe per fill
+
+::: {.exercici}
+Canvia el disseny perquè el pare creï **una pipe per a cada fill**. Cada fill escriu el seu número a la seva pipe i el pare el llegeix del canal corresponent.
+
+Mantén la redirecció de `stdout`, de manera que `generador.c` continuï sense conèixer les pipes.
+
+**Preguntes**
+
+1. Quantes pipes es creen?
+2. Quin avantatge té saber de quin fill prové cada lectura?
+3. Quin inconvenient té aquest disseny respecte d'una única pipe compartida?
+   
+:::
+
+<details>
+<summary><b>Mostra la solució</b></summary>
+
+::: {.solucio}
+En aquesta etapa, `generador.c` és exactament el mateix que a l'etapa 3.
+
+### `loteria.c`
+
+```c
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+
+#define N 6
+
+int main(void)
+{
+    int pipes[N][2];
+    pid_t fills[N];
+    int numeros[N];
+
+    for (int i = 0; i < N; i++) {
+        if (pipe(pipes[i]) == -1) {
+            perror("pipe");
+            exit(EXIT_FAILURE);
+        }
+    }
+
+    for (int i = 0; i < N; i++) {
+        pid_t pid = fork();
+
+        if (pid == -1) {
+            perror("fork");
+            exit(EXIT_FAILURE);
+        }
+
+        if (pid == 0) {
+            for (int j = 0; j < N; j++) {
+                close(pipes[j][0]);
+
+                if (j != i)
+                    close(pipes[j][1]);
+            }
+
+            if (dup2(pipes[i][1], STDOUT_FILENO) == -1) {
+                perror("dup2");
+                _exit(1);
+            }
+            close(pipes[i][1]);
+
+            execl("./generador", "generador", (char *) NULL);
+            perror("execl");
+            _exit(127);
+        }
+
+        fills[i] = pid;
+    }
+
+    for (int i = 0; i < N; i++)
+        close(pipes[i][1]);
+
+    for (int i = 0; i < N; i++) {
+        FILE *entrada = fdopen(pipes[i][0], "r");
+
+        if (entrada == NULL) {
+            perror("fdopen");
+            exit(EXIT_FAILURE);
+        }
+
+        if (fscanf(entrada, "%d", &numeros[i]) != 1) {
+            fprintf(stderr, "Error llegint el fill %d\n", i);
+            fclose(entrada);
+            exit(EXIT_FAILURE);
+        }
+
+        fclose(entrada);
+    }
+
+    for (int i = 0; i < N; i++)
+        waitpid(fills[i], NULL, 0);
+
+    printf("Bitllet:");
+    for (int i = 0; i < N; i++)
+        printf(" %d", numeros[i]);
+    printf("\n");
+
+    return 0;
+}
+```
+
+### Compilació i execució
+
+```bash
+gcc -Wall -Wextra -o generador generador.c
+gcc -Wall -Wextra -o loteria loteria.c
+./loteria
+```
+
+**Explicació.** Amb N fills es creen N pipes. Cada fill conserva només l'extrem d'escriptura del seu canal i el pare llegeix del canal corresponent. Això associa directament cada valor a una posició del bitllet.
+
+El cost és que s'han de gestionar més descriptors. A més, el pare llegeix les pipes en ordre: si un fill encara no ha escrit, la lectura del seu canal pot bloquejar-se encara que altres fills ja hagin acabat.
+:::
+</details>
+
+## Enviar una `struct` per la pipe
+
+::: {.exercici}
+Fes que cada fill enviï un missatge amb una estructura que contingui:
+- l'identificador del fill;
+- el número generat.
+
+El pare ha de llegir els missatges, reconstruir el bitllet i mostrar quin fill ha generat cada número.
+
+**Preguntes**
+
+1. Es poden enviar estructures amb `write()`?
+2. Cal convertir els camps a text?
+3. Per què és útil incloure un identificador si els missatges poden arribar en qualsevol ordre?
+
+:::
+
+<details>
+<summary><b>Mostra la solució</b></summary>
+
+::: {.solucio}
+Per mantenir el focus en les estructures, aquesta versió utilitza una pipe comuna i no inclou el senyal. La sincronització amb `SIGUSR1` es pot afegir després reutilitzant la lògica de l'etapa anterior.
+
+### `generador.c`
+
+```c
+#include <stdio.h>
+#include <stdlib.h>
+#include <time.h>
+#include <unistd.h>
+
+typedef struct {
+    int id;
+    int numero;
+} missatge_t;
+
+int main(int argc, char *argv[])
+{
+    if (argc != 2) {
+        fprintf(stderr, "Ús: generador id\n");
+        return 1;
+    }
+
+    missatge_t m;
+    m.id = atoi(argv[1]);
+
+    srand((unsigned int) time(NULL) ^ (unsigned int) getpid());
+    m.numero = 1 + rand() % 49;
+
+    if (write(STDOUT_FILENO, &m, sizeof m) != sizeof m) {
+        perror("write");
+        return 1;
+    }
+
+    return 0;
+}
+```
+
+### `loteria.c`
+
+```c
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+
+#define N 6
+
+typedef struct {
+    int id;
+    int numero;
+} missatge_t;
+
+int main(void)
+{
+    int p[2];
+    pid_t fills[N];
+    int numeros[N];
+
+    if (pipe(p) == -1) {
+        perror("pipe");
+        exit(EXIT_FAILURE);
+    }
+
+    for (int i = 0; i < N; i++) {
+        pid_t pid = fork();
+
+        if (pid == -1) {
+            perror("fork");
+            exit(EXIT_FAILURE);
+        }
+
+        if (pid == 0) {
+            close(p[0]);
+
+            if (dup2(p[1], STDOUT_FILENO) == -1) {
+                perror("dup2");
+                _exit(1);
+            }
+            close(p[1]);
+
+            char id_text[20];
+            snprintf(id_text, sizeof id_text, "%d", i);
+
+            execl("./generador", "generador", id_text, (char *) NULL);
+            perror("execl");
+            _exit(127);
+        }
+
+        fills[i] = pid;
+    }
+
+    close(p[1]);
+
+    int rebuts = 0;
+    while (rebuts < N) {
+        missatge_t m;
+        ssize_t n = read(p[0], &m, sizeof m);
+
+        if (n == 0)
+            break;
+
+        if (n != sizeof m) {
+            fprintf(stderr, "Missatge incomplet\n");
+            close(p[0]);
+            exit(EXIT_FAILURE);
+        }
+
+        if (m.id < 0 || m.id >= N) {
+            fprintf(stderr, "Identificador invàlid: %d\n", m.id);
+            continue;
+        }
+
+        numeros[m.id] = m.numero;
+        printf("Rebut del fill %d: %d\n", m.id, m.numero);
+        rebuts++;
+    }
+
+    close(p[0]);
+
+    for (int i = 0; i < N; i++)
+        waitpid(fills[i], NULL, 0);
+
+    printf("Bitllet:");
+    for (int i = 0; i < N; i++)
+        printf(" %d", numeros[i]);
+    printf("\n");
+
+    return 0;
+}
+```
+
+### Compilació i execució
+
+```bash
+gcc -Wall -Wextra -o generador generador.c
+gcc -Wall -Wextra -o loteria loteria.c
+./loteria
+```
+
+**Explicació.** `write()` i `read()` treballen amb blocs de bytes; no cal convertir una estructura a text. Com que els missatges són petits i cada fill fa una única escriptura de mida inferior a `PIPE_BUF`, les escriptures no s'intercalen entre si. L'identificador permet col·locar cada número a la posició correcta encara que els missatges arribin en un ordre diferent del de creació dels fills.
+
+**Nota:** el codi assumeix una lectura completa de cada estructura, una simplificació habitual en una primera pràctica. En un programa general cal gestionar lectures i escriptures parcials amb funcions auxiliars `read_full()` i `write_full()`. En protocols entre màquines també caldria definir el format de bytes i l'endianness; una pipe local entre processos del mateix programa no ho necessita.
+:::
+</details>
+
+
+## Alternativa per la escriptura i lectura de missatges
+
+
+:::::{.panel-tabset}
+
+##### `read()` (crida al sistema)
+
+```c
+int numero;
+ssize_t n = read(fd, &numero, sizeof numero);
+
+if (n == sizeof numero) {
+    printf("Rebut: %d\n", numero);
+} else if (n == 0) {
+    fprintf(stderr, "Fi de la pipe inesperat\n");
+} else {
+    perror("read");
+}
+```
+
+`fd` és el descriptor de lectura de la pipe. En una implementació robusta cal repetir la lectura si retorna menys bytes dels demanats, ja que una crida a `read()` no garanteix omplir sempre tot el buffer.
+
+##### `fscanf()` (biblioteca C)
+
+```c
+FILE *entrada = fdopen(fd, "r");
+if (entrada == NULL) {
+    perror("fdopen");
+    exit(EXIT_FAILURE);
+}
+
+int numero;
+if (fscanf(entrada, "%d", &numero) == 1) {
+    printf("Rebut: %d\n", numero);
+} else {
+    fprintf(stderr, "No s'ha pogut llegir el número\n");
+}
+
+fclose(entrada);  
+```
+
+Aquesta alternativa pressuposa que el fill envia text, per exemple amb `printf("%d\n", numero)`. No és compatible amb un fill que escrigui el valor binari d'un `int` amb `write(fd, &numero, sizeof numero)`: pare i fill han d'acordar el mateix format de missatge.
+:::::
+
+## Sincronització simple amb `signal()` i `kill()`
+
+::: {.exercici}
+En aquesta etapa treballarem els senyals sense introduir la versió *ben feta* de `sigaction()`.
+
+El protocol serà el següent:
+
+1. El pare crea una pipe per fill i crea els N fills.
+2. Cada fill redirigeix `stdout` cap a la seva pipe amb `dup2()` i executa `generador`.
+3. Cada generador instal·la un gestor de `SIGUSR1` i avisa el pare enviant-li `SIGUSR2`.
+4. Quan el pare considera que tots els fills estan preparats, envia `SIGUSR1` a cadascun.
+5. Cada fill genera un número entre 1 i 49 i el mostra amb `printf()`; el text arriba al pare a través de la pipe.
+6. El pare llegeix un número de cada pipe amb `fscanf()` i mostra el bitllet.
+
+
+:::
+
+<details>
+<summary><b>Mostra la solució </b></summary>
+::: {.solucio}
+### `generador.c`
+
+```c
+#include <stdio.h>
+#include <stdlib.h>
+#include <signal.h>
+#include <time.h>
+#include <unistd.h>
+
+static volatile sig_atomic_t començar = 0;
+
+static void gestor(int senyal)
+{
+    (void) senyal;
+    començar = 1;
+}
+
+int main(void)
+{
+
+    if (signal(SIGUSR1, gestor) == SIG_ERR) {
+        perror("signal");
+        return 1;
+    }
+
+    if (kill(getppid(), SIGUSR2) == -1) {
+        perror("kill");
+        return 1;
+    }
+
+    while (!començar)
+        pause();
+
+    srand((unsigned int) time(NULL) ^ (unsigned int) getpid());
+    int numero = 1 + rand() % 49;
+
+    printf("%d\n", numero);
+    return 0;
+}
+```
+
+### `loteria.c`
+
+```c
+#include <stdio.h>
+#include <stdlib.h>
+#include <signal.h>
+#include <unistd.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+
+#define N 6
+
+static volatile sig_atomic_t preparats = 0;
+
+static void gestor_sigusr2(int senyal)
+{
+    (void) senyal;
+    preparats++;
+}
+
+int main(void)
+{
+    int pipes[N][2];
+    pid_t fills[N];
+    int numeros[N];
+
+    if (signal(SIGUSR2, gestor_sigusr2) == SIG_ERR) {
+        perror("signal");
+        return EXIT_FAILURE;
+    }
+
+    for (int i = 0; i < N; i++) {
+        if (pipe(pipes[i]) == -1) {
+            perror("pipe");
+            return EXIT_FAILURE;
+        }
+    }
+
+    for (int i = 0; i < N; i++) {
+        pid_t pid = fork();
+
+        if (pid == -1) {
+            perror("fork");
+            return EXIT_FAILURE;
+        }
+
+        if (pid == 0) {
+
+            for (int j = 0; j < N; j++)
+                close(pipes[j][0]);
+
+            for (int j = 0; j < N; j++) {
+                if (j != i)
+                    close(pipes[j][1]);
+            }
+
+            if (dup2(pipes[i][1], STDOUT_FILENO) == -1) {
+                perror("dup2");
+                _exit(127);
+            }
+            close(pipes[i][1]);
+
+            execl("./generador", "generador", (char *) NULL);
+            perror("execl");
+            _exit(127);
+        }
+
+        fills[i] = pid;
+    }
+
+    for (int i = 0; i < N; i++)
+        close(pipes[i][1]);
+
+    while (preparats < N)
+        pause();
+
+    for (int i = 0; i < N; i++) {
+        if (kill(fills[i], SIGUSR1) == -1) {
+            perror("kill");
+            return EXIT_FAILURE;
+        }
+    }
+
+    for (int i = 0; i < N; i++) {
+        FILE *entrada = fdopen(pipes[i][0], "r");
+        if (entrada == NULL) {
+            perror("fdopen");
+            return EXIT_FAILURE;
+        }
+
+        if (fscanf(entrada, "%d", &numeros[i]) != 1) {
+            fprintf(stderr, "Error llegint el número del fill %d\n", i);
+            fclose(entrada);
+            return EXIT_FAILURE;
+        }
+
+        fclose(entrada); 
+    }
+
+    for (int i = 0; i < N; i++) {
+        if (waitpid(fills[i], NULL, 0) == -1) {
+            perror("waitpid");
+            return EXIT_FAILURE;
+        }
+    }
+
+    printf("Bitllet:");
+    for (int i = 0; i < N; i++)
+        printf(" %d", numeros[i]);
+    printf("\n");
+
+    return EXIT_SUCCESS;
+}
+```
+
+### Compilació i execució
+
+```bash
+gcc -Wall -Wextra -o generador generador.c
+gcc -Wall -Wextra -o loteria loteria.c
+./loteria
+```
+
+### Aclariments i limitacions
+
+::: {.callout-warning}
+**Aquesta versió és didàctica, no una implementació robusta del protocol.**
+
+- **Els senyals estàndard no són comptadors.** Si diversos fills envien `SIGUSR2` mentre el senyal anterior encara està pendent, el sistema pot coalescir notificacions i el pare podria no comptar-les totes. Per això, el bucle `while (preparats < N) pause();` no garanteix que el programa progressi en totes les execucions.
+- **Hi ha una cursa amb `pause()`.** Un senyal pot arribar després de comprovar la condició però abans d'entrar a `pause()`. Si això passa, el procés podria quedar adormit tot i que ja s'hagi rebut el senyal esperat.
+- **El gestor del pare només fa una operació simple.** Incrementar una variable de tipus `volatile sig_atomic_t` és adequat per a aquesta demostració, però no converteix els senyals en un mecanisme fiable de comptatge.
+- **La pipe transporta les dades.** `SIGUSR1` i `SIGUSR2` només s'utilitzen per coordinar els processos; el número es comunica mitjançant `write()` i `read()`.
+
+Per fer una versió robusta, podem bloquejar els senyals i esperar-los amb `sigwait()` o amb `sigprocmask()` i `sigsuspend()`. Una altra alternativa molt clara per al comptatge exacte és utilitzar una pipe de preparació, i reservar els senyals per a l'ordre de començar.
+:::
+:::
+</details>
