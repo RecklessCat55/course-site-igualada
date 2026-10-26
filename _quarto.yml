@@ -84,6 +84,12 @@ website:
               - href: blocs/02-proc/pralabs/01_minishell.qmd
               - href: blocs/02-proc/pralabs/02_minishell.qmd
               - href: blocs/02-proc/pralabs/03_minishell.qmd
+        - section: "Bloc 3 · Planificació"
+          contents:
+            - section: "Teoria"
+              contents:
+                - href: blocs/03-sched/teoria/01-sched.qmd
+            - section: "Activitats"
     
 
 
