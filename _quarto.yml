@@ -89,6 +89,7 @@ website:
             - section: "Teoria"
               contents:
                 - href: blocs/03-sched/teoria/01-sched.qmd
+                - href: blocs/03-sched/teoria/02-sched.qmd
             - section: "Activitats"
     
 
