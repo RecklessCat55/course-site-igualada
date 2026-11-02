@@ -1,0 +1,217 @@
+---
+title: "Prioritats, SJF/SRTF, cues multinivell, MLFQ"
+author: "Jordi Mateo Fornés"
+format: udl-course-html
+---
+
+::: {.objectius}
+-   Planificar amb **prioritats**, **SJF**, **SRTF** i **cues multinivell**, amb i sense E/S.
+-   Reconèixer i resoldre **inanició** (envelliment) i **inversió de prioritats** (herència).
+-   Predir ràfegues amb la **mitjana exponencial** i entendre el paper d'$\alpha$.
+-   Aplicar les regles de l'**MLFQ**, el *boost* i la comptabilitat del temps acumulat.
+-   Calcular el repartiment de CPU de **CFS** a partir del `nice`.
+:::
+
+
+## Convenis
+
+Són els mateixos que al full anterior, amb tres afegits per a les polítiques noves.
+
+::: {.concepte title="Model d'execució"}
+1.  Temps **discret**: la columna $t$ és l'interval $[t, t+1)$.
+2.  Ràfegues de CPU i d'E/S alternades; tot procés comença i acaba amb CPU.
+3.  Cada procés té el seu dispositiu: **les E/S no fan cua**. Un procés que acaba l'E/S a $t$ és preparat a $t$.
+4.  Una sola CPU (llevat que es digui el contrari) i canvi de context de cost **zero**.
+:::
+
+::: {.examtip title="Desempat i expulsions"}
+-   Entrades simultànies a una cua (arribades i retorns d'E/S): per **prioritat** (1 és la més alta).
+-   Un procés expulsat (per quantum **o** per un procés més prioritari) torna al **final** de la seva cua, darrere dels que entren en aquell instant, amb el **quantum reiniciat**. **Excepció**: a l'MLFQ (Problemes 10 i 11), un procés expulsat per un nivell superior **conserva** el quantum restant.
+-   **SJF/SRTF** treballen amb la **ràfega actual** (o el que en queda), no amb el total del procés. Amb SRTF només hi ha expulsió si el nou és **estrictament** més curt; en cas d'empat, per prioritat.
+-   **Prioritats**: un procés només n'expulsa un altre si té prioritat **estrictament** més alta.
+:::
+
+## Mètriques
+
+| Mètrica | Definició |
+|---------|-----------|
+| $T_{espera}$ | Temps a la cua de preparats (caselles **P**). No inclou E/S ni el temps bloquejat esperant un *lock*. |
+| $T_{resposta}$ | $T_{inici} - T_a$ |
+| $T_{retorn}$ | $T_f - T_a$ |
+| $T_N$ | $T_{retorn} / (T_{cpu} + T_{E/S})$ |
+| Utilització | CPU ocupada / ($n_{CPU} \cdot T_{final}$) |
+| Productivitat | processos acabats / $T_{final}$ |
+
+**Llegenda**: **E** execució · **W** E/S · **P** preparat · **B** bloquejat esperant un *lock* · **C** execució dins d'una secció crítica · **F** finalitzat. A l'MLFQ, el número que acompanya E o P és el **nivell** del procés (0 = el més alt).
+
+Podeu utiltizar [plantilla](./src/template.xlsx)
+
+## Problema 3 · Cues multinivell sense retroalimentació
+
+En un sistema amb 1 CPU s'executen els processos següents:
+
+| Procés | Tipus | Cua | $T_a$ | Prioritat | Ràfegues |
+|:------:|-------|:---:|:-----:|:---------:|----------|
+| A | Temps real crític | 1 | 5 | 1 | $1_{CPU},\ 1_{E/S},\ 2_{CPU},\ 3_{E/S},\ 1_{CPU}$ |
+| B | Temps real | 2 | 0 | 2 | $2_{CPU},\ 3_{E/S},\ 1_{CPU},\ 3_{E/S},\ 1_{CPU}$ |
+| C | Interactiu | 3 | 2 | 3 | $4_{CPU},\ 4_{E/S},\ 2_{CPU},\ 2_{E/S},\ 1_{CPU}$ |
+| D | Interactiu | 3 | 3 | 4 | $1_{CPU},\ 4_{E/S},\ 3_{CPU},\ 4_{E/S},\ 2_{CPU}$ |
+| E | Batch | 4 | 4 | 5 | $2_{CPU},\ 2_{E/S},\ 4_{CPU},\ 1_{E/S},\ 2_{CPU}$ |
+| F | Batch | 4 | 4 | 6 | $4_{CPU},\ 1_{E/S},\ 2_{CPU}$ |
+
+El planificador a curt termini té **4 cues**. Cada procés hi és assignat de manera fixa:
+
+| Cua | Processos | Algorisme |
+|:---:|-----------|-----------|
+| 1 (la més prioritària) | Temps real crític | FCFS |
+| 2 | Temps real | Round Robin, $q = 1$ |
+| 3 | Interactius | Round Robin, $q = 3$ |
+| 4 (la menys prioritària) | Batch | SRTF |
+
+-   Entre cues hi ha **prioritat estricta**: una cua només s'atén si totes les més prioritàries són buides.
+-   L'apropiació entre cues és **immediata**: quan un procés d'una cua més prioritària passa a preparat, expulsa el que s'executa.
+-   Els empats dins una mateixa cua es desfan per prioritat (1 la més alta, 6 la més baixa).
+
+1.  Dibuixa el diagrama de Gantt.
+2.  Calcula totes les mètriques per a cada procés.
+3.  Analitza l'impacte de la planificació multinivell sobre cada classe de procés i sobre el rendiment del sistema.
+
+
+## Problema 4 · Prioritats amb E/S: apropiativa o no?
+
+| Procés | $T_a$ | Prioritat | Ràfegues |
+|:------:|:-----:|:---------:|----------|
+| A | 0 | 3 | $3_{CPU},\ 2_{E/S},\ 2_{CPU}$ |
+| B | 1 | 1 | $2_{CPU},\ 3_{E/S},\ 1_{CPU}$ |
+| C | 2 | 4 | $4_{CPU}$ |
+| D | 3 | 2 | $1_{CPU},\ 2_{E/S},\ 2_{CPU}$ |
+
+1.  Planifica per prioritats **a) no apropiatives** i **b) apropiatives**.
+2.  Calcula totes les mètriques.
+3.  Quin procés guanya més amb l'apropiació? Quin no hi guanya res? Per què?
+
+
+## Problema 5 · SJF, SRTF i l'optimalitat
+
+| Procés | $T_a$ | $T_{cpu}$ |
+|:------:|:-----:|:---------:|
+| A | 0 | 8 |
+| B | 1 | 4 |
+| C | 2 | 9 |
+| D | 3 | 5 |
+| E | 5 | 2 |
+
+1.  Planifica amb **a) FCFS**, **b) SJF**, **c) SRTF** i **d) RR $q=2$**. Els empats es desfan per ordre alfabètic.
+2.  Calcula $\bar{T}_{espera}$, $\bar{T}_{resposta}$ i $\bar{T}_{retorn}$.
+3.  Comprova que SRTF dona el mínim $\bar{T}_{retorn}$. Dona també el mínim $\bar{T}_{resposta}$?
+4.  Quin procés surt més perjudicat amb SRTF respecte de FCFS? Què passaria si arribessin processos curts contínuament?
+
+## Problema 6 · SRTF amb E/S: per a qui és bo?
+
+| Procés | $T_a$ | Ràfegues |
+|:------:|:-----:|----------|
+| A | 0 | $6_{CPU},\ 2_{E/S},\ 1_{CPU}$ |
+| B | 1 | $1_{CPU},\ 3_{E/S},\ 1_{CPU},\ 3_{E/S},\ 1_{CPU}$ |
+| C | 2 | $3_{CPU},\ 1_{E/S},\ 3_{CPU}$ |
+
+Empats: A > B > C.
+
+1.  Planifica amb **a) FCFS**, **b) RR $q=2$** i **c) SRTF** (per ràfega).
+2.  Calcula totes les mètriques.
+3.  B és un procés limitat per E/S. Quan acaba B en cada cas? Què li passa al dispositiu de B?
+4.  SRTF té el millor $\bar{T}_{retorn}$ però el $T_{final}$ més gran. Per què?
+
+
+## Problema 7 · Inanició i envelliment
+
+Planificació per prioritats **apropiativa**, sense E/S. Vuit processos $J_1, \dots, J_8$ de prioritat **2** i ràfega **2** arriben a $t = 0, 2, 4, \dots, 14$. El procés **L**, de prioritat **5** i ràfega **2**, arriba a $t=0$. A prioritat igual, s'executa el que fa més temps que espera.
+
+**Envelliment**: cada $K$ unitats consecutives a la cua de preparats, la prioritat d'un procés millora en 1 (fins a 1). Un procés conserva la prioritat envellida fins que acaba la seva ràfega.
+
+1.  Planifica **a) sense envelliment**, **b) amb $K=2$** i **c) amb $K=4$**.
+2.  Calcula el $T_{espera}$ de L i dels $J_i$ en cada cas.
+3.  Quin és el cost de l'envelliment? Qui el paga?
+
+## Problema 8 · Inversió de prioritats
+
+Planificació per prioritats **apropiativa**, sense E/S. H i L comparteixen un *lock* $S$; M no l'utilitza.
+
+| Procés | $T_a$ | Prioritat | Comportament |
+|:------:|:-----:|:---------:|--------------|
+| L | 0 | 3 | 1 de CPU; **agafa $S$**; 3 dins la secció crítica; **allibera $S$**; 1 de CPU |
+| H | 2 | 1 | 1 de CPU; **agafa $S$**; 2 dins la secció crítica; **allibera $S$**; 1 de CPU |
+| M | 3 | 2 | 4 de CPU |
+
+Si un procés demana $S$ i està ocupat, es **bloqueja** (no consumeix CPU) fins que s'allibera.
+
+1.  Dibuixa el Gantt **a) sense** i **b) amb herència de prioritat**.
+2.  Calcula $T_{retorn}$ de cada procés en tots dos casos.
+3.  Per què es diu que, sense herència, el bloqueig de H és **no acotat**? Hi hauria inversió de prioritats si M no existís?
+
+## Problema 9 · Mitjana exponencial
+
+$$\tau_{n+1} = \alpha\, t_n + (1-\alpha)\,\tau_n$$
+
+Prenem $\tau_0 = 6$ i dues sèries de ràfegues reals:
+
+-   **Sèrie 1** (canvi de fase): $4, 4, 4, 10, 10, 10$
+-   **Sèrie 2** (soroll): $8, 4, 8, 4, 8, 4$
+
+1.  Calcula les prediccions $\tau_1, \dots, \tau_6$ amb $\alpha = 1/2$ i amb $\alpha = 1$ per a cada sèrie.
+2.  Calcula l'error total $\sum_n |\tau_n - t_n|$ (per a $n = 0, \dots, 5$) en cada cas.
+3.  Quin $\alpha$ és millor per a cada sèrie? Què en dedueixes?
+
+## Problema 10 · MLFQ
+
+MLFQ amb 3 nivells: **nivell 0** RR $q=2$, **nivell 1** RR $q=4$, **nivell 2** FCFS. Prioritat estricta entre nivells i apropiació immediata.
+
+::: {.concepte title="Regles d'aquesta MLFQ"}
+1.  Un procés nou entra al nivell 0.
+2.  Si **esgota el quantum** en una tornada a la CPU, baixa un nivell i rep un quantum nou.
+3.  Si **es bloqueja abans** d'esgotar-lo, es queda al mateix nivell. Quan torna d'E/S, rep un quantum nou.
+4.  Si un procés d'un nivell superior l'**expulsa**, torna al final de la cua del seu nivell i **conserva el quantum que li quedava**: quan torni a la CPU, només podrà executar-se durant aquest restant.
+5.  ***Boost*** (només a l'apartat b): en l'instant del *boost*, **tots** els processos no acabats passen al nivell 0 amb un quantum nou. Això inclou els preparats (en l'ordre en què eren a les cues), el que s'està executant i els bloquejats, que hi entraran quan tornin d'E/S.
+:::
+
+::: {.errorcomu title="Aquesta regla 4 és diferent de la resta del full"}
+A la resta de problemes, un procés expulsat rep un quantum nou. Aquí **el conserva**. Amb l'altre conveni, la solució de l'apartat a canvia: A acabaria a $t=14$ en lloc de $t=18$.
+:::
+
+| Procés | $T_a$ | Ràfegues |
+|:------:|:-----:|----------|
+| A | 0 | $8_{CPU}$ |
+| B | 1 | $1_{CPU},\ 2_{E/S},\ 1_{CPU},\ 2_{E/S},\ 1_{CPU}$ |
+| C | 2 | $3_{CPU},\ 1_{E/S},\ 5_{CPU}$ |
+
+Empats: A > B > C.
+
+1.  Planifica **a) amb les regles 1–4** i **b) afegint un *boost* a $t=10$**.
+2.  Calcula les mètriques i indica en quin nivell és cada procés a cada instant.
+3.  En aquest cas, el *boost* millora o empitjora? Quan és imprescindible?
+
+## Problema 11 · MLFQ: fer trampa
+
+MLFQ amb 2 nivells: **nivell 0** RR $q=3$, **nivell 1** FCFS. Expulsions entre nivells com al Problema 10 (regla 4). No hi ha *boost*.
+
+::: {.definicio title="Quantum i allotment"}
+-   **Quantum**: temps **màxim d'execució consecutiva** en una tornada a la CPU. Quan s'esgota, el procés deixa la CPU.
+-   **Allotment**: **pressupost acumulat** de CPU que un procés pot gastar en un nivell, **sumant totes les seves tornades**. Quan s'esgota, el procés **baixa de nivell**.
+:::
+
+Amb les regles bàsiques, l'allotment és, de fet, el quantum d'una sola tornada: com que cada bloqueig el posa a zero, un procés que es bloqueja sovint no baixa mai. Aquí és on hi ha la trampa.
+
+| Procés | $T_a$ | Ràfegues |
+|:------:|:-----:|----------|
+| N (honest) | 0 | $8_{CPU}$ |
+| T (trampos) | 0 | $2_{CPU},\ 1_{E/S},\ 2_{CPU},\ 1_{E/S},\ 2_{CPU},\ 1_{E/S},\ 2_{CPU}$ |
+
+T fa una E/S inútil just abans d'esgotar el quantum, com el programa d'Othello de la sessió. Empats: N > T.
+
+1.  **a) Regles bàsiques.** Un procés baixa de nivell si esgota el quantum de 3 en una sola tornada.
+2.  **b) Comptabilitat acumulada.** Quantum de 3 i **allotment de 5** al nivell 0.
+    -   Si esgota el **quantum** però no l'allotment, torna al final del nivell 0.
+    -   Si esgota l'**allotment**, baixa al nivell 1 immediatament, encara que sigui a mitja ràfega. També si l'esgota just en acabar una ràfega.
+    -   L'allotment no es posa a zero quan el procés es bloqueja.
+3.  Compara $T_{retorn}$ de N i de T en tots dos casos.
+4.  Compara-ho amb el cas en què T és **honest**: una sola ràfega de 8 unitats de CPU i cap E/S. La trampa li surt a compte?
+
