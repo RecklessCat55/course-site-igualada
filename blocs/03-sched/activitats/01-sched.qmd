@@ -1,0 +1,82 @@
+---
+title: "FCFS i Round Robin"
+subtitle: "Unitat 4 · Sistemes Operatius (SO)"
+author: "Jordi Mateo Fornés"
+format: udl-course-html
+---
+
+::: {.objectius title="Objectius"}
+-   Planificar a mà processos amb ràfegues de CPU i d'E/S alternades.
+-   Calcular totes les mètriques de planificació amb un conveni explícit.
+-   Avaluar l'efecte del quantum i del nombre de CPU sobre el resultat.
+:::
+
+## Convenis
+
+Tots els problemes d'aquest full fan servir **els mateixos convenis**. Si en feu servir un altre, escriviu-lo abans de començar: sense conveni, una planificació no es pot corregir.
+
+::: {.concepte title="Model d'execució"}
+1.  El temps és **discret**: la columna $t$ representa l'interval $[t, t+1)$.
+2.  Cada procés alterna ràfegues de CPU i d'E/S; comença i acaba amb una ràfega de CPU.
+3.  Quan un procés acaba una ràfega de CPU a l'instant $t$, comença la seva E/S a $t$. Cada procés té el seu propi dispositiu: **les E/S no fan cua**.
+4.  Un procés que acaba l'E/S a l'instant $t$ és a la cua de preparats a $t$ i pot executar-se a $t$.
+5.  Hi ha **una sola cua de preparats**, compartida per totes les CPU. Una CPU lliure agafa el primer procés de la cua; el procés no té afinitat per cap CPU.
+6.  El canvi de context té cost **zero**.
+:::
+
+::: {.examtip title="Desempat"}
+-   Si diversos processos entren a la cua de preparats **al mateix instant** (perquè arriben o perquè tornen d'E/S), hi entren per ordre de **prioritat** (1 és la més alta).
+-   Un procés **expulsat per fi de quantum** en aquell mateix instant entra a la cua **darrere** d'ells. Si n'hi ha diversos, també per prioritat.
+-   A Round Robin, el quantum es reinicia cada vegada que un procés obté la CPU. Si el quantum expira i la cua és buida, el procés continua.
+:::
+
+## Mètriques
+
+| Mètrica | Definició |
+|---------|-----------|
+| $T_{espera}$ | Temps total a la **cua de preparats** (caselles **P**). El temps fent E/S **no** és espera. |
+| $T_{resposta}$ | $T_{inici} - T_a$, on $T_{inici}$ és la primera vegada que s'executa. |
+| $T_{retorn}$ | $T_f - T_a$ |
+| $T_N$ (retorn normalitzat) | $T_{retorn} / (T_{cpu} + T_{E/S})$. Val 1 si el procés no ha esperat mai. |
+| Utilització de la CPU | $\dfrac{\text{temps de CPU ocupada}}{n_{CPU} \cdot T_{final}}$ |
+| Productivitat | $\dfrac{\text{processos acabats}}{T_{final}}$ |
+
+**Llegenda dels diagrames**: **E** execució · **W** E/S · **P** preparat · **F** finalitzat (instant de finalització) · casella buida: el procés encara no ha arribat o ja ha acabat. Les files *CPU* indiquen quin procés ocupa cada CPU (– si està ociosa).
+
+Podeu utiltizar [plantilla](./src/template.xlsx)
+
+## Problema 1 · FCFS amb 1 i 2 CPU
+
+Planifica els processos següents amb **FCFS** (no apropiatiu).
+
+| Procés | Prioritat | $T_a$ | Ràfegues | CPU total | E/S total |
+|:------:|:---------:|:-----:|----------|:---------:|:---------:|
+| A      | 4         | 3     | $1_{CPU},\ 4_{E/S},\ 1_{CPU},\ 5_{E/S},\ 1_{CPU}$ | 3 | 9 |
+| B      | 3         | 0     | $4_{CPU},\ 1_{E/S},\ 3_{CPU},\ 1_{E/S},\ 2_{CPU}$ | 9 | 2 |
+| C      | 2         | 1     | $1_{CPU},\ 5_{E/S},\ 1_{CPU},\ 1_{E/S},\ 2_{CPU}$ | 4 | 6 |
+| D      | 1         | 2     | $5_{CPU},\ 2_{E/S},\ 4_{CPU}$ | 9 | 2 |
+
+1.  Dibuixa el diagrama de Gantt amb **a) 1 CPU** i **b) 2 CPU**.
+2.  Calcula totes les mètriques per a cada cas.
+3.  Discuteix els avantatges i inconvenients de la planificació i avalua l'impacte de passar d'1 a 2 CPU.
+
+
+## Problema 2 · Round Robin: quantum i nombre de CPU
+
+Planifica els processos següents amb **Round Robin**. Atenció: ara C arriba a $t=4$.
+
+| Procés | Prioritat | $T_a$ | Ràfegues | CPU total | E/S total |
+|:------:|:---------:|:-----:|----------|:---------:|:---------:|
+| A      | 4         | 3     | $1_{CPU},\ 4_{E/S},\ 1_{CPU},\ 5_{E/S},\ 1_{CPU}$ | 3 | 9 |
+| B      | 3         | 0     | $4_{CPU},\ 1_{E/S},\ 3_{CPU},\ 1_{E/S},\ 2_{CPU}$ | 9 | 2 |
+| C      | 2         | 4     | $1_{CPU},\ 5_{E/S},\ 1_{CPU}$ | 2 | 5 |
+| D      | 1         | 2     | $5_{CPU},\ 2_{E/S},\ 4_{CPU}$ | 9 | 2 |
+
+1.  Dibuixa el diagrama de Gantt amb **a) RR $q=1$, 1 CPU**, **b) RR $q=3$, 1 CPU** i **c) RR $q=1$, 2 CPU**.
+2.  Calcula totes les mètriques per a cada cas.
+3.  Discuteix els avantatges i inconvenients de cada planificació i avalua l'impacte del quantum i del nombre de CPU.
+
+::: {.reflexio title="Abans de començar"}
+Quins processos són limitats per CPU i quins per E/S? Quin d'ells esperes que guanyi més en passar de $q=3$ a $q=1$?
+:::
+
