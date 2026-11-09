@@ -94,6 +94,16 @@ website:
               contents:
                 - href: blocs/03-sched/activitats/01-sched.qmd
                 - href: blocs/03-sched/activitats/02-sched.qmd
+
+        - section: "Bloc 7 · Shell Scripting"
+          contents:
+            - section: Teoria
+              contents:
+                - href: blocs/07-shell/teoria/01-shell.qmd
+                - href: blocs/07-shell/teoria/02-shell.qmd
+            - section: Pralabs
+              contents:
+                - href: blocs/07-shell/pralabs/01-shell.qmd
     
 
 

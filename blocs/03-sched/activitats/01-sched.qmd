@@ -60,6 +60,76 @@ Planifica els processos següents amb **FCFS** (no apropiatiu).
 2.  Calcula totes les mètriques per a cada cas.
 3.  Discuteix els avantatges i inconvenients de la planificació i avalua l'impacte de passar d'1 a 2 CPU.
 
+<details>
+<summary><strong>Solució: a) FCFS amb 1 CPU</strong></summary>
+
+::: {.solucio title="a) FCFS amb 1 CPU"}
+::: table-responsive
+| Procés | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18 | 19 | 20 | 21 | 22 | 23 | 24 | 25 | 26 | 27 | 28 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| **A** |  |  |  | P | P | P | P | P | P | P | E | W | W | W | W | P | P | P | P | P | P | E | W | W | W | W | W | E | F |
+| **B** | E | E | E | E | W | P | P | P | P | P | P | E | E | E | W | P | P | P | P | E | E | F |  |  |  |  |  |  |  |
+| **C** |  | P | P | P | E | W | W | W | W | W | P | P | P | P | E | W | P | P | P | P | P | P | E | E | F |  |  |  |  |
+| **D** |  |  | P | P | P | E | E | E | E | E | W | W | P | P | P | E | E | E | E | F |  |  |  |  |  |  |  |  |  |
+| *CPU* | B | B | B | B | C | D | D | D | D | D | A | B | B | B | C | D | D | D | D | B | B | A | C | C | – | – | – | A |  |
+:::
+
+| Mètrica | A | B | C | D | Mitjana |
+|---|---|---|---|---|---|
+| $T_f$ | 28 | 21 | 24 | 19 | – |
+| $T_{espera}$ | 13 | 10 | 13 | 6 | 10.5 |
+| $T_{resposta}$ | 7 | 0 | 3 | 3 | 3.25 |
+| $T_{retorn}$ | 25 | 21 | 23 | 17 | 21.5 |
+| $T_N$ | 25/12 = 2.08 | 21/11 = 1.91 | 23/10 = 2.3 | 17/11 = 1.55 | 1.96 |
+
+Utilització de la CPU $= 25/28 \approx 89\,\%$ · Productivitat $= 4/28 \approx 0.14$ processos/u.t. · Final de la planificació: $t = 28$.
+
+A $t=10$ la cua és A (arribada a 3), B (tornada d'E/S a 5) i C (tornada a 10): FCFS respecta l'ordre d'entrada a la cua, no l'ordre d'arribada al sistema. A $t=16$ C torna de la segona E/S i es troba D, B i A al davant: espera 6 unitats per una ràfega de 2. La CPU està ociosa a $t=24$–$26$: A és l'únic procés viu i està fent E/S.
+:::
+
+</details>
+
+<details>
+<summary><strong>Solució: b) FCFS amb 2 CPU</strong></summary>
+
+::: {.solucio title="b) FCFS amb 2 CPU"}
+::: table-responsive
+| Procés | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18 | 19 | 20 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| **A** |  |  |  | P | E | W | W | W | W | P | P | P | P | E | W | W | W | W | W | E | F |
+| **B** | E | E | E | E | W | E | E | E | W | P | P | E | E | F |  |  |  |  |  |  |  |
+| **C** |  | E | W | W | W | W | W | E | W | E | E | F |  |  |  |  |  |  |  |  |  |
+| **D** |  |  | E | E | E | E | E | W | W | E | E | E | E | F |  |  |  |  |  |  |  |
+| *CPU1* | B | B | B | B | A | B | B | B | – | C | C | B | B | A | – | – | – | – | – | A |  |
+| *CPU2* | – | C | D | D | D | D | D | C | – | D | D | D | D | – | – | – | – | – | – | – |  |
+:::
+
+| Mètrica | A | B | C | D | Mitjana |
+|---|---|---|---|---|---|
+| $T_f$ | 20 | 13 | 11 | 13 | – |
+| $T_{espera}$ | 5 | 2 | 0 | 0 | 1.75 |
+| $T_{resposta}$ | 1 | 0 | 0 | 0 | 0.25 |
+| $T_{retorn}$ | 17 | 13 | 10 | 11 | 12.75 |
+| $T_N$ | 17/12 = 1.42 | 13/11 = 1.18 | 10/10 = 1 | 11/11 = 1 | 1.15 |
+
+Utilització de la CPU $= 25/40 \approx 63\,\%$ · Productivitat $= 4/20 = 0.2$ processos/u.t. · Final de la planificació: $t = 20$.
+
+A $t=9$ els **quatre** processos tornen d'E/S alhora i només hi ha 2 CPU. Per prioritat entren a la cua D, C, B, A: s'executen D i C, B espera fins a $t=11$ i A, el menys prioritari, fins a $t=13$. A $t=8$ totes dues CPU són ocioses: tots els processos fan E/S.
+:::
+
+</details>
+
+<details>
+<summary><strong>Solució: discussió</strong></summary>
+
+::: {.solucio title="Discussió"}
+-   **Comboi amb 1 CPU.** A, el procés més limitat per E/S (ràfegues d'1), és el que pitjor surt: espera 13 unitats per executar-ne 3. Queda dues vegades darrere de ràfegues llargues: de C i D a $t=4$–$9$, i de D i B a $t=15$–$20$. C pateix el mateix a $t=16$–$21$.
+-   **2 CPU.** El retorn mitjà baixa de 21.5 a 12.75 i l'espera mitjana de 10.5 a 1.75. La utilització, en canvi, baixa del 89 % al 63 %: **duplicar les CPU no duplica el rendiment**.
+-   El motiu és que aquesta càrrega està limitada per l'E/S. A no pot acabar abans de $T_a + T_{cpu} + T_{E/S} = 3 + 12 = 15$, i amb 2 CPU acaba a 20.
+-   Els 5 de marge es perden quasi tots a $t=9$–$12$. Els quatre processos tornen d'E/S alhora, i el desempat per prioritat deixa A, el de prioritat 4, l'últim. Amb 2 CPU, la competència per la CPU es concentra en pocs instants, i en aquests instants el **conveni de desempat** pesa més que la política.
+:::
+
+</details>
 
 ## Problema 2 · Round Robin: quantum i nombre de CPU
 
@@ -80,3 +150,118 @@ Planifica els processos següents amb **Round Robin**. Atenció: ara C arriba a 
 Quins processos són limitats per CPU i quins per E/S? Quin d'ells esperes que guanyi més en passar de $q=3$ a $q=1$?
 :::
 
+<details>
+<summary><strong>Solució: a) RR q = 1, 1 CPU</strong></summary>
+
+::: {.solucio title="a) RR q = 1, 1 CPU"}
+::: table-responsive
+| Procés | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18 | 19 | 20 | 21 | 22 | 23 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| **A** |  |  |  | P | E | W | W | W | W | P | E | W | W | W | W | W | E | F |  |  |  |  |  |  |
+| **B** | E | E | P | E | P | P | P | E | W | E | P | P | E | P | P | E | W | P | E | P | E | F |  |  |
+| **C** |  |  |  |  | P | P | E | W | W | W | W | W | P | E | F |  |  |  |  |  |  |  |  |  |
+| **D** |  |  | E | P | P | E | P | P | E | P | P | E | P | P | E | W | W | E | P | E | P | E | E | F |
+| *CPU* | B | B | D | B | A | D | C | B | D | B | A | D | B | C | D | B | A | D | B | D | B | D | D |  |
+:::
+
+| Mètrica | A | B | C | D | Mitjana |
+|---|---|---|---|---|---|
+| $T_f$ | 17 | 21 | 14 | 23 | – |
+| $T_{espera}$ | 2 | 10 | 3 | 10 | 6.25 |
+| $T_{resposta}$ | 1 | 0 | 2 | 0 | 0.75 |
+| $T_{retorn}$ | 14 | 21 | 10 | 21 | 16.5 |
+| $T_N$ | 14/12 = 1.17 | 21/11 = 1.91 | 10/7 = 1.43 | 21/11 = 1.91 | 1.60 |
+
+Utilització de la CPU $= 23/23 \approx 100\,\%$ · Productivitat $= 4/23 \approx 0.17$ processos/u.t. · Final de la planificació: $t = 23$.
+
+Instants on cal aplicar el conveni: a $t=2$ arriba D i B és expulsat (D davant); a $t=3$ arriba A i D és expulsat (A davant de D); a $t=4$ arriba C i B és expulsat (C davant de B); a $t=9$ B torna d'E/S i D és expulsat (B davant); a $t=17$ D i B tornen d'E/S alhora (D davant per prioritat). Hi ha **20 canvis de context**.
+:::
+
+</details>
+
+<details>
+<summary><strong>Solució: b) RR q = 3, 1 CPU</strong></summary>
+
+::: {.solucio title="b) RR q = 3, 1 CPU"}
+::: table-responsive
+| Procés | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18 | 19 | 20 | 21 | 22 | 23 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| **A** |  |  |  | P | P | P | E | W | W | W | W | P | P | P | E | W | W | W | W | W | P | P | E | F |
+| **B** | E | E | E | P | P | P | P | E | W | P | P | E | E | E | W | P | P | P | P | E | E | F |  |  |
+| **C** |  |  |  |  | P | P | P | P | E | W | W | W | W | W | P | P | P | P | E | F |  |  |  |  |
+| **D** |  |  | P | E | E | E | P | P | P | E | E | W | W | P | P | E | E | E | P | P | P | E | F |  |
+| *CPU* | B | B | B | D | D | D | A | B | C | D | D | B | B | B | A | D | D | D | C | B | B | D | A |  |
+:::
+
+| Mètrica | A | B | C | D | Mitjana |
+|---|---|---|---|---|---|
+| $T_f$ | 23 | 21 | 19 | 22 | – |
+| $T_{espera}$ | 8 | 10 | 8 | 9 | 8.75 |
+| $T_{resposta}$ | 3 | 0 | 4 | 1 | 2 |
+| $T_{retorn}$ | 20 | 21 | 15 | 20 | 19 |
+| $T_N$ | 20/12 = 1.67 | 21/11 = 1.91 | 15/7 = 2.14 | 20/11 = 1.82 | 1.88 |
+
+Utilització de la CPU $= 23/23 \approx 100\,\%$ · Productivitat $= 4/23 \approx 0.17$ processos/u.t. · Final de la planificació: $t = 23$.
+
+A $t=3$ A arriba però D, que ja era a la cua, obté la CPU i la conserva 3 unitats. A $t=6$ D és expulsat i passa darrere d'A, B i C. Hi ha **12 canvis de context**.
+:::
+
+</details>
+
+<details>
+<summary><strong>Solució: c) RR q = 1, 2 CPU</strong></summary>
+
+::: {.solucio title="c) RR q = 1, 2 CPU"}
+::: table-responsive
+| Procés | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| **A** |  |  |  | E | W | W | W | W | E | W | W | W | W | W | E | F |
+| **B** | E | E | E | P | E | W | E | E | E | W | P | E | E | F |  |  |
+| **C** |  |  |  |  | E | W | W | W | W | W | E | F |  |  |  |  |
+| **D** |  |  | E | E | P | E | E | E | W | W | E | E | E | E | F |  |
+| *CPU1* | B | B | B | A | B | D | D | D | A | – | C | B | B | – | A |  |
+| *CPU2* | – | – | D | D | C | – | B | B | B | – | D | D | D | D | – |  |
+:::
+
+| Mètrica | A | B | C | D | Mitjana |
+|---|---|---|---|---|---|
+| $T_f$ | 15 | 13 | 11 | 14 | – |
+| $T_{espera}$ | 0 | 2 | 0 | 1 | 0.75 |
+| $T_{resposta}$ | 0 | 0 | 0 | 0 | 0 |
+| $T_{retorn}$ | 12 | 13 | 7 | 12 | 11 |
+| $T_N$ | 12/12 = 1 | 13/11 = 1.18 | 7/7 = 1 | 12/11 = 1.09 | 1.07 |
+
+Utilització de la CPU $= 23/30 \approx 77\,\%$ · Productivitat $= 4/15 \approx 0.27$ processos/u.t. · Final de la planificació: $t = 15$.
+
+A $t=3$ arriba A mentre B i D són expulsats: A entra primer i, darrere, D i B per prioritat; s'executen A i D. A $t=10$ B, C i D tornen d'E/S alhora i només hi ha 2 CPU: per prioritat, s'executen D i C i B espera. A $t=9$ les dues CPU són ocioses: tots els processos fan E/S. L'assignació concreta a CPU1 o CPU2 és indiferent, perquè el model no té afinitat.
+:::
+
+</details>
+
+<details>
+<summary><strong>Solució: discussió</strong></summary>
+
+::: {.solucio title="Discussió"}
+::: table-responsive
+| Cas | $\bar{T}_{espera}$ | $\bar{T}_{resposta}$ | $\bar{T}_{retorn}$ | $\bar{T}_N$ | Utilització | $T_{final}$ | Canvis de context |
+|-----|------|------|------|------|------|------|------|
+| RR $q=1$, 1 CPU | 6.25 | 0.75 | 16.5 | 1.60 | 100 % | 23 | 20 |
+| RR $q=3$, 1 CPU | 8.75 | 2    | 19   | 1.88 | 100 % | 23 | 12 |
+| RR $q=1$, 2 CPU | 0.75 | 0    | 11   | 1.07 | 77 %  | 15 | – |
+:::
+
+-   **Quantum.** Amb 1 CPU, $q=1$ guanya en totes les mitjanes. Els que en surten beneficiats són **A i C**, limitats per E/S i amb ràfegues d'1 unitat: amb $q=3$ han d'esperar torns sencers de 3 de B i D (C passa de $T_{retorn} = 10$ a 15, A de 14 a 20). B i D, limitats per CPU, gairebé no ho noten.
+-   **El preu.** $q=1$ fa gairebé el doble de canvis de context (20 contra 12). Amb cost zero no es veu; amb un cost real, cada canvi és temps de CPU perdut i memòria cau freda.
+-   **Productivitat.** Amb 1 CPU, totes dues acaben a $t=23$, que és exactament el temps total de CPU (23): la CPU no ha estat mai ociosa. Si no hi ha forats, el quantum canvia **qui** acaba abans, no **quan** acaba tot.
+-   **2 CPU.** El retorn mitjà baixa de 16.5 a 11, A i C tenen $T_N = 1$, i el conjunt acaba a $t=15$, el **mínim possible**: A arriba a 3 i necessita 12 unitats de CPU i E/S. A partir d'aquí, més CPU no ajudaria. La utilització baixa al 77 % perquè, a molts instants, no hi ha prou feina per a dues CPU.
+:::
+
+</details>
+
+::: {.errorcomu title="Errors freqüents"}
+-   **Barrejar convenis**: posar l'expulsat davant del nou en un instant i darrere en un altre. Escriviu el conveni i apliqueu-lo sempre igual.
+-   **Comptar l'E/S com a espera**: les caselles **W** no sumen a $T_{espera}$.
+-   **Calcular $T_N$ només amb la CPU**: amb E/S, el mínim possible de $T_{retorn}$ és $T_{cpu} + T_{E/S}$.
+-   **No reiniciar el quantum** quan el procés torna a obtenir la CPU després d'una E/S.
+-   **Utilització amb 2 CPU**: el denominador és $2 \cdot T_{final}$, no $T_{final}$.
+:::

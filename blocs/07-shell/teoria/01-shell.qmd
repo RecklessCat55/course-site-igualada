@@ -1,0 +1,796 @@
+---
+title: "Shell scripting (I)"
+subtitle: "Shell · Variables · Entorn · Expansions · Aritmètica · Arrays"
+author: "Jordi Mateo Fornés"
+format:
+  revealjs:
+    theme: [simple, ../../../_extensions/udl-course/styles/revealjs.scss, ../../../styles/slides.scss]
+    filters: [../../../_extensions/udl-course/components.lua]
+    transition: fade
+    slide-number: true
+    code-line-numbers: false
+    incremental: true
+    chalkboard: false
+    slide-level: 2
+    width: 1600
+    height: 900
+    margin: 0.08
+    center: false
+    footer: 'Sistemes Operatius (SO) &nbsp; <a href="/index.html" class="home-link" aria-label="Inici"><svg class="home-icon" viewBox="0 0 120 100" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path d="M12 52 C27 43 39 31 60 12 C78 30 93 42 108 51" fill="none" stroke="currentColor" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/><path d="M25 48 C25 64 25 76 24 87 C35 84 45 85 53 87 M95 48 C95 64 95 76 97 87 C87 84 77 85 68 87" fill="none" stroke="currentColor" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/><path d="M51 87V70 C51 64 55 60 60 60 C65 60 69 64 69 70V87Z" fill="currentColor"/><path d="M82 29V17 C82 14 84 13 87 13H94 C96 13 97 15 96 17 C94 20 93 24 94 32Z" fill="currentColor"/></svg></a>'
+---
+
+## Objectius de la sessió
+
+::: {.objectius title="En acabar la sessió, has de ser capaç de"}
+-   Explicar què és una **shell**, com executa una comanda (**fork + exec**) i què és el **codi de sortida**.
+-   Escriure i executar un **shell script** (shebang, permisos, `bash script.sh` vs `./script.sh`).
+-   Usar **variables**, entendre l'**àmbit** i l'**entorn** (`export`) i la relació amb els processos fills.
+-   Distingir els tres tipus de **cometes** i saber quan s'apliquen les **expansions**.
+-   Fer **aritmètica entera**, treballar amb **arrays** i **manipular cadenes**.
+:::
+
+::: {.prerequisits title="Necessites recordar"}
+-   Procés, procés pare i fill, PID.
+-   Crida al sistema `fork()` i `exec()`.
+-   Sistema de fitxers i permisos d'UNIX.
+:::
+
+## On som i on anem
+
+-   Fins ara hem fet servir la shell **interactivament**: escrivim una comanda i veiem el resultat.
+-   Un **script** és la mateixa shell, però llegint les comandes d'un fitxer.
+-   La shell és un **programa de l'espai d'usuari** que crea processos: és l'exemple més proper de tot el que hem vist de processos.
+
+
+# Què és una shell?
+
+## La shell: un intèrpret de comandes
+
+-   La **shell** és el programa que ens permet interactuar amb el nucli: llegeix una línia, la interpreta i demana al SO que executi programes.
+-   No forma part del nucli: és un **procés d'usuari** com qualsevol altre (el pots veure amb `ps`).
+-   Al llarg de la història n'han aparegut moltes:
+
+
+::: {.fragment}
+
+| Shell | Nom                 | Autor                          |
+|-------|---------------------|--------------------------------|
+| `sh`  | Bourne shell        | Stephen Bourne                 |
+| `csh` | C shell             | Bill Joy                       |
+| `ksh` | Korn shell          | David Korn                     |
+| `bash`| Bourne again shell  | Brian Fox i Chet Ramey         |
+| `zsh` | Z shell             | Paul Falstad                   |
+| `tcsh`| Tenex C shell       | Ken Greer                      |
+:::
+
+::: {.fragment}
+```bash
+echo $SHELL        # shell de login de l'usuari
+cat /etc/shells    # shells instal·lades al sistema
+```
+:::
+
+::: {.errorcomu title="A Debian, sh no és bash" .fragment}
+A Debian, `/bin/sh` és **dash**: una shell més lleugera i estricta que només implementa POSIX. Si un script fa servir arrays, `[[ ]]` o `$(( ))` amb funcionalitats de bash, **ha de dir `#!/bin/bash`**, no `#!/bin/sh`.
+:::
+
+## Anatomia d'una comanda
+
+Una **comanda** és una seqüència de paraules separades per espais:
+
+-   La **primera paraula** és el nom de la comanda.
+-   La resta són **arguments**: **opcions** (comencen per `-`) i **paràmetres**.
+
+::: {.fragment}
+```bash
+cat -n /etc/shells
+# cat         -> la comanda
+# -n          -> opció: numera les línies
+# /etc/shells -> paràmetre: el fitxer a mostrar
+```
+:::
+
+-   Per conèixer les opcions d'una comanda: `cat --help`, `man cat`.
+-   Cal distingir entre comandes **internes** (*builtins*: `cd`, `echo`, `read`, `export`...) i **externes** (programes a disc: `ls`, `cat`, `grep`...).
+
+::: {.fragment}
+
+```bash
+type cd      # cd is a shell builtin
+type ls      # ls is /usr/bin/ls
+```
+
+:::
+
+## Com executa la shell una comanda
+
+::: {.concepte title="fork + exec + wait"}
+Quan escrivim una comanda **externa**, la shell:
+
+1.  fa un **`fork()`**: crea un procés fill (còpia d'ella mateixa);
+2.  el fill fa un **`exec()`** del programa demanat (substitueix la seva imatge);
+3.  la shell pare fa un **`wait()`** i espera que el fill acabi (execució en **primer pla**).
+:::
+
+-   Els **builtins** s'executen **dins** del procés de la shell, sense `fork`. Per això `cd` ha de ser un builtin: un fill no pot canviar el directori del pare.
+-   Si afegim `&` al final, la shell **no espera** el fill (execució en **segon pla**). Ho veurem a la sessió següent.
+
+::: {.fragment}
+```bash
+echo "El PID de la shell és $$"
+sleep 100 &
+echo "El fill és $!  i el seu pare és $$"
+ps -o pid,ppid,cmd
+```
+:::
+
+## Codi de sortida
+
+-   Quan un procés acaba retorna un **codi de sortida** (*exit status*), un enter de 0 a 255.
+-   **Convenció**: `0` = èxit; qualsevol altre valor = error.
+-   La shell el guarda a la variable especial `$?`.
+
+::: {.fragment}
+
+```bash
+cat /etc/shells      # existeix
+echo $?              # 0
+
+cat /etc/shell       # no existeix
+echo $?              # 1
+```
+:::
+
+-   Ho fem servir per **decidir** què fer després (`if`, `&&`, `||`).
+-   Un script acaba amb `exit N`. Si no hi ha `exit`, retorna el codi de l'**última comanda** executada.
+
+# Shell scripts
+
+## Què és un shell script?
+
+Un **script** és un fitxer de text amb una seqüència de comandes que la shell executa **una darrere l'altra**.
+
+```bash
+cat << 'EOF' > list_shells.sh
+#!/bin/bash
+cat /etc/shells
+EOF
+```
+
+-   `cat << 'EOF' > fitxer` és un ***here-document***: tot el que hi ha fins a la línia `EOF` s'envia a l'entrada estàndard de `cat`, i `>` ho redirigeix al fitxer.
+-   Les cometes a `'EOF'` eviten que la shell expandeixi variables dins del bloc.
+-   La primera línia `#!/bin/bash` és el ***shebang***: diu al nucli **quin intèrpret** ha d'executar el fitxer.
+
+::: {.concepte title="Qui llegeix el shebang?" .fragment}
+No és la shell: és el **nucli**, dins de `execve()`. Si el fitxer comença amb `#!`, el nucli arrenca l'intèrpret indicat i li passa el fitxer com a argument. Per això és **recomanable** (necessari si l'executem com `./script.sh`).
+:::
+
+## Executar un script
+
+```bash
+bash list_shells.sh        # 1) passem el fitxer com a argument de bash
+
+chmod +x list_shells.sh    # 2) donem permís d'execució...
+./list_shells.sh           #    ...i l'executem directament
+```
+
+-   Amb (1), el shebang es **ignora** (es tracta com a comentari): el fitxer no necessita permís d'execució.
+-   Amb (2), el nucli llegeix el shebang i fa servir l'intèrpret indicat.
+-   Alternativa portable: `#!/usr/bin/env bash` (busca `bash` al `PATH`).
+
+::: {.errorcomu title="Per què cal el ./ ?" .fragment}
+La shell només busca comandes als directoris del `PATH`, i el directori actual **no** hi és (per seguretat). `list_shells.sh` no es troba; `./list_shells.sh` indica la ruta explícitament.
+:::
+
+-   **`source script.sh`** (o `. script.sh`) l'executa **dins** de la shell actual, sense crear un fill: els canvis de variables i `cd` **es mantenen**.
+
+## Per a què serveix el shell scripting?
+
+-   **Automatitzar** tasques repetitives.
+-   Crear **comandes pròpies** i petites eines.
+-   Scripts d'**instal·lació**, de **configuració** i de **manteniment**.
+-   **Enganxar programes** entre ells (el principi d'UNIX: programes petits que fan una cosa bé).
+-   **Tests** i integració contínua.
+
+::: {.fragment}
+```bash
+#!/bin/bash
+# Instal·la el compilador gcc a partir del codi font
+VERSION=9.3.0
+wget https://ftp.gnu.org/gnu/gcc/gcc-$VERSION/gcc-$VERSION.tar.gz
+tar -xzf gcc-$VERSION.tar.gz            # descomprimeix
+mkdir gcc-$VERSION-build && cd gcc-$VERSION-build
+../gcc-$VERSION/configure --enable-languages=c,c++ --disable-multilib
+make -j$(nproc)                         # compila en paral·lel
+make install                            # instal·la
+```
+:::
+
+## Fitxers d'inicialització (Debian)
+
+Quan s'inicia una shell, `bash` llegeix uns fitxers que configuren l'entorn. Quins depèn de **com** s'inicia:
+
+| Tipus de shell                           | Fitxers que llegeix                                         |
+|------------------------------------------|-------------------------------------------------------------|
+| **Login** (després de `login`, `ssh`...) | `/etc/profile`, i el primer que existeixi de `~/.bash_profile`, `~/.bash_login`, `~/.profile` |
+| **Interactiva no login** (nova terminal) | `/etc/bash.bashrc` i `~/.bashrc`                            |
+| **Script** (`bash script.sh`)            | Cap (llevat de la variable `BASH_ENV`)                      |
+| Al tancar una shell de login             | `~/.bash_logout`                                            |
+
+-   A Debian el `~/.profile` per defecte ja carrega `~/.bashrc`, de manera que la configuració personal acostuma a anar a **`~/.bashrc`**.
+-   Els fitxers globals són a `/etc`; els personals, al directori de l'usuari, i poden **sobreescriure** els globals.
+
+::: {.fragment}
+```bash
+echo 'export EDITOR=nano'  >> ~/.bashrc
+echo 'export HISTSIZE=1000' >> ~/.bashrc
+echo 'export PATH="$PATH:$HOME/bin"' >> ~/.bashrc
+source ~/.bashrc           # recarrega sense tancar la sessió
+```
+:::
+
+::: {.errorcomu title="Comentaris i scripts" .fragment}
+Els scripts **no** llegeixen `~/.bashrc`: no et pots fiar que un alias o una variable definits allà existeixin dins d'un script.
+:::
+
+# Sortida per pantalla i cometes
+
+## `echo` i `printf`
+
+-   **`echo`**: mostra text. Opció `-n` per no acabar amb salt de línia; `-e` per interpretar `\n`, `\t`.
+-   **`printf`**: sortida **formatada** com a C. Més portable i previsible que `echo`.
+
+::: {.fragment}
+
+| Format | Significat                                  |
+|--------|---------------------------------------------|
+| `%s`   | cadena                                      |
+| `%d`   | enter                                       |
+| `%f`   | decimal (`%.2f` = 2 decimals)               |
+| `%-15s`| cadena alineada a l'esquerra en 15 caràcters|
+| `\n`   | salt de línia (**no** s'afegeix automàticament) |
+
+:::
+::: {.fragment}
+
+```bash
+printf "%-12s %-8s %5s %8s\n" "Nom" "Tipus" "Atac" "Pes(kg)"
+printf "%-12s %-8s %5d %8.1f\n" "Bulbasaur"  "Planta" 49 6.9
+printf "%-12s %-8s %5d %8.1f\n" "Charmander" "Foc"    52 8.5
+printf "%-12s %-8s %5d %8.1f\n" "Squirtle"   "Aigua"  48 9.0
+```
+:::
+
+-   Un `\` al final de línia **continua** la comanda a la línia següent: ajuda a la llegibilitat.
+
+## Les tres menes de cometes
+
+| Forma      | Nom            | Efecte                                                       |
+|------------|----------------|--------------------------------------------------------------|
+| `\`        | escapament     | tracta **un** caràcter literalment                           |
+| `'...'`    | cometes simples| **tot** és literal, no s'expandeix res                       |
+| `"..."`    | cometes dobles | literal, **excepte** `$`, `` ` `` i `\`: s'expandeixen variables i substitucions |
+
+```bash
+nom="Pikachu"
+echo "$nom, t'elegeixo a tu!"     # Pikachu, t'elegeixo a tu!
+echo '$nom, t'\''elegeixo a tu!'  # $nom, t'elegeixo a tu!
+echo $nom, t\'elegeixo a tu!      # Pikachu, t'elegeixo a tu!
+```
+
+::: {.errorcomu title="Dins de cometes simples no es pot escapar la '" .fragment}
+`echo 'Pikachu, t\'elegeixo'` **falla**: dins de `'...'` la barra és un caràcter normal i la `'` tanca la cadena. Solucions: usar cometes dobles, o tancar i reobrir: `'t'\''elegeixo'`.
+:::
+
+::: {.concepte title="Regla pràctica" .fragment}
+**Cometeja sempre les variables**: `"$nom"`. Sense cometes, la shell fa *word splitting* i *globbing* sobre el contingut (ho veurem a les expansions).
+:::
+
+# Variables
+
+## Variables: assignació i ús
+
+-   S'assignen amb `=` **sense espais** i es llegeixen amb el prefix `$`.
+-   No tenen tipus declarat: tot són **cadenes** (excepte arrays i quan s'usa `declare`).
+
+::: {.fragment}
+```bash
+nom="Charmander"
+echo $nom                 # Charmander
+
+nom = "Pikachu"           # ERROR
+# bash: nom: no s'ha trobat l'ordre
+```
+:::
+
+::: {.concepte title="Per què falla amb espais?" .fragment}
+Amb espais, la shell llegeix `nom` com un **nom de comanda** i `=` i `"Pikachu"` com els seus arguments. Una assignació és una sola paraula: `nom=valor`.
+:::
+
+-   `unset nom` elimina la variable. Una variable no definida s'expandeix a **cadena buida**.
+
+::: {.fragment}
+```bash
+nom="Charmander"
+unset nom
+echo "[$nom]"             # []
+```
+:::
+
+## Interpolació i valors per defecte
+
+Amb `{}` delimitem el nom de la variable dins d'un text:
+
+```bash
+sufix="saur"
+echo "Bulba${sufix}"      # Bulbasaur
+echo "Ivy${sufix}"        # Ivysaur
+echo "$sufix_final"       # (buit! busca una variable anomenada sufix_final)
+```
+
+Expansions de **valor per defecte**, molt útils en scripts:
+
+| Forma              | Resultat                                                  |
+|--------------------|-----------------------------------------------------------|
+| `${v:-defecte}`    | el valor de `v`, o `defecte` si és buida/no definida      |
+| `${v:=defecte}`    | igual, però **assigna** `defecte` a `v`                   |
+| `${v:?missatge}`   | si `v` és buida, mostra l'error i **atura** el script     |
+| `${v:+alternatiu}` | `alternatiu` si `v` està definida, buit si no             |
+
+```bash
+equip="${1:-Equip Rocket}"        # primer argument o valor per defecte
+echo "Equip: $equip"
+```
+
+## Espais i *word splitting*
+
+Si una variable conté espais i **no** la cometegem, la shell la divideix en paraules (separades per `IFS`: espai, tabulador i salt de línia) i els espais consecutius es **col·lapsen**.
+
+```bash
+nom="Ash     Ketchum"       # 5 espais
+echo $nom                   # Ash Ketchum          (2 arguments)
+echo "$nom"                 # Ash     Ketchum      (1 argument)
+```
+
+El problema és greu quan hi ha noms de fitxer amb espais:
+
+```bash
+fitxer="el meu pokemon.txt"
+touch $fitxer               # crea 3 fitxers: "el", "meu", "pokemon.txt"
+touch "$fitxer"             # crea 1 fitxer
+```
+
+::: {.errorcomu title="Sempre entre cometes dobles" .fragment}
+Excepte que **vulguis** que es divideixi, escriu `"$variable"`. És la font d'errors més freqüent en shell scripts.
+:::
+
+## Variables de només lectura i `declare`
+
+```bash
+readonly TIPUS1='foc'
+declare -r TIPUS2='aigua'
+
+TIPUS1='planta'
+# bash: TIPUS1: variable de només lectura
+```
+
+-   Per **convenció**, les constants s'escriuen en **MAJÚSCULES**.
+-   `declare` permet afegir **atributs**:
+
+| Opció | Efecte                              |
+|-------|-------------------------------------|
+| `-i`  | variable **entera**                 |
+| `-r`  | només lectura                       |
+| `-a`  | array indexat                       |
+| `-A`  | array associatiu                    |
+| `-x`  | exportada (com `export`)            |
+
+```bash
+declare -i hp=35
+hp="hp+10"           # amb -i, s'avalua aritmèticament
+echo $hp             # 45
+```
+
+# Entorn i processos
+
+## Àmbit de les variables
+
+-   Una variable normal és **local a la shell** (o script) on s'ha definit: **no** la veuen els processos fills.
+-   Amb `export` la convertim en **variable d'entorn**: es **copia** a l'entorn de tots els fills.
+
+```bash
+#!/bin/bash
+nom="Charmander"          # només a aquesta shell
+export tipus="foc"        # variable d'entorn
+
+bash -c 'echo "nom=[$nom]  tipus=[$tipus]"'
+# nom=[]  tipus=[foc]
+```
+
+::: {.concepte title="L'entorn s'hereta per còpia" .fragment}
+Quan la shell fa `fork()`, el fill rep una **còpia** de l'entorn. El fill pot modificar-la, però el **pare no ho veu mai**. Cap procés pot canviar les variables d'un altre. Per això un script no pot fer `export` d'una variable cap a la shell que l'ha cridat (si no és amb `source`).
+:::
+
+```bash
+export PUNTS=10
+bash -c 'PUNTS=99; echo "fill: $PUNTS"'    # fill: 99
+echo "pare: $PUNTS"                        # pare: 10
+```
+
+## Variables d'entorn habituals
+
+| Variable | Contingut                                          | Exemple                     |
+|----------|----------------------------------------------------|-----------------------------|
+| `PATH`   | directoris on es busquen els executables           | `/usr/local/bin:/usr/bin:/bin` |
+| `HOME`   | directori personal                                 | `/home/jordi`               |
+| `USER`   | nom de l'usuari                                    | `jordi`                     |
+| `PWD`    | directori de treball actual                        | `/home/jordi`               |
+| `SHELL`  | shell de login                                     | `/bin/bash`                 |
+| `LANG`   | llengua i localització                             | `ca_ES.UTF-8`               |
+| `IFS`    | separadors de camps per a *word splitting*         | espai, tab, salt de línia   |
+
+```bash
+printenv             # només les variables d'entorn (exportades)
+printenv PATH
+set                  # TOTES: entorn, locals i funcions
+env VAR=valor cmd    # executa cmd amb una variable afegida a l'entorn
+VAR=valor cmd        # forma abreujada, només per a aquesta comanda
+```
+
+-   Les variables d'entorn **configuren** el comportament de programes sense canviar-ne el codi.
+
+## Paràmetres posicionals i variables especials
+
+| Variable    | Significat                                                     |
+|-------------|----------------------------------------------------------------|
+| `$0`        | nom del script                                                 |
+| `$1` … `$9`, `${10}` | arguments (a partir del 10, calen claus)              |
+| `$#`        | **nombre** d'arguments                                         |
+| `$@`        | tots els arguments, **cadascun com a paraula separada**        |
+| `$*`        | tots els arguments, **units en una sola cadena**               |
+| `$?`        | codi de sortida de l'última comanda                            |
+| `$$`        | **PID** de la shell/script actual                              |
+| `$!`        | PID de l'últim procés posat en **segon pla**                   |
+| `$PPID`     | PID del procés **pare**                                        |
+
+```bash
+#!/bin/bash
+echo "Script: $0   Arguments: $#   PID: $$   Pare: $PPID"
+for p in "$@";  do echo "[@] $p"; done
+for p in "$*";  do echo "[*] $p"; done
+```
+
+```bash
+./args.sh "Mr Mime" Pikachu
+# [@] Mr Mime       [@] Pikachu       [*] Mr Mime Pikachu
+```
+
+::: {.errorcomu title='Usa "$@", no $* ni $@ sense cometes' .fragment}
+Només `"$@"` conserva cada argument tal com l'ha escrit l'usuari, inclosos els que tenen espais.
+:::
+
+## `shift` i `set --`
+
+-   **`shift [n]`** descarta els `n` primers paràmetres posicionals i desplaça la resta (`$2` passa a ser `$1`).
+-   **`set -- a b c`** **assigna** els paràmetres posicionals: útil per dividir una cadena.
+
+```bash
+#!/bin/bash
+echo "Entrenador: $1"
+shift
+echo "Pokémon de l'equip: $@"        # la resta d'arguments
+```
+
+```bash
+set -- hell to highway
+echo $3 $2 $1                         # highway to hell
+
+set -- $(date)                        # divideix la sortida de date en camps
+echo "Any: ${@: -1}"                  # l'últim camp
+```
+
+::: {.errorcomu title="set -- vs set -u" .fragment}
+`set` serveix per **dues coses diferents**: sense opció (o després de `--`) assigna paràmetres posicionals; amb opcions (`-e`, `-u`, `-x`...) canvia el **comportament de la shell**. Ho veurem a les bones pràctiques.
+:::
+
+## Substitució de comandes
+
+Permet **usar la sortida d'una comanda com a text**:
+
+```bash
+echo "La data és $(date)"             # forma moderna
+echo "La data és `date`"              # forma antiga amb cometes inverses
+
+n=$(ls | wc -l)                       # guarda un nombre en una variable
+echo "Hi ha $n fitxers"
+```
+
+-   Es prefereix `$( )`: es pot **niar** i és més llegible.
+-   La comanda s'executa en un **subshell** (un `fork()`).
+-   La substitució **elimina** els salts de línia finals.
+
+```bash
+llista=$(ls -l)
+echo $llista          # tot en una línia (word splitting)
+echo "$llista"        # conserva els salts de línia
+```
+
+# Expansions
+
+## Ordre d'expansió
+
+Abans d'executar una comanda, la shell **transforma** la línia que has escrit. Ho fa en aquest ordre:
+
+1.  **Brace expansion**: `{a,b,c}`
+2.  **Tilde**: `~`
+3.  **Paràmetres i variables**: `$var`, `${var}`
+4.  **Substitució de comandes**: `$(cmd)`
+5.  **Aritmètica**: `$(( ))`
+6.  ***Word splitting***
+7.  ***Globbing*** (patrons de fitxers): `*`, `?`, `[...]`
+8.  Eliminació de cometes
+
+::: {.concepte title="La shell expandeix, no el programa" .fragment}
+Quan escrivim `ls *.txt`, `ls` **no veu** l'asterisc: la shell l'ha substituït per la llista de fitxers i `ls` rep ja `a.txt b.txt c.txt`. Pots comprovar-ho amb `echo *.txt`.
+:::
+
+## Globbing i brace expansion
+
+**Globbing** (coincidència de noms de fitxer):
+
+| Patró     | Coincideix amb                           |
+|-----------|------------------------------------------|
+| `*`       | qualsevol seqüència de caràcters         |
+| `?`       | exactament un caràcter                   |
+| `[abc]`   | un caràcter del conjunt                  |
+| `[a-z]`   | un caràcter del rang                     |
+| `[!abc]`  | un caràcter que **no** és del conjunt    |
+
+**Brace expansion** (genera cadenes, no mira el disc):
+
+```bash
+ls *.txt                            # tots els .txt
+ls pokemon_0[0-9].json              # pokemon_00 ... pokemon_09
+echo {bulbasaur,charmander,squirtle}.txt
+touch equip_{1..3}.txt              # equip_1.txt equip_2.txt equip_3.txt
+mkdir -p pokedex/{kanto,johto,hoenn}/{planta,foc,aigua}
+echo ~                              # /home/jordi
+```
+
+::: {.errorcomu title="Si no hi ha coincidències..." .fragment}
+Si el patró no coincideix amb cap fitxer, bash el deixa **literal** (`ls *.xyz` busca un fitxer anomenat `*.xyz`). Amb `shopt -s nullglob` s'expandeix a res.
+:::
+
+# Aritmètica
+
+## Aritmètica entera
+
+Bash només treballa amb **enters** (de 64 bits). Hi ha tres formes:
+
+```bash
+pikachu_cp=500
+charmander_cp=300
+
+let total=pikachu_cp*2+charmander_cp          # 1) let
+total=$(expr $pikachu_cp \* 2 + $charmander_cp)   # 2) expr (antiga, calen \*)
+total=$(( pikachu_cp * 2 + charmander_cp ))       # 3) $(( )) (recomanada)
+echo "CP total: $total"                       # 1300
+```
+
+-   Dins de `$(( ))` **no cal** el `$` davant de les variables i els espais són lliures.
+-   `(( expressió ))` (sense `$`) avalua i retorna **codi de sortida** (0 si el resultat ≠ 0): s'usa en condicions.
+
+```bash
+(( hp -= 10 ))        # equivalent a hp=$((hp-10))
+(( hp++ ))
+(( hp > 0 )) && echo "Pikachu continua dempeus"
+mitjana=$(( (64 + 63 + 62) / 3 ))      # 63: divisió entera
+```
+
+::: {.errorcomu title="No hi ha decimals" .fragment}
+`echo $((7/2))` dóna `3`. Per a nombres reals cal una eina externa: `echo "scale=2; 7/2" | bc` → `3.50`.
+:::
+
+## Operadors aritmètics
+
+| Operador              | Descripció                                  |
+|-----------------------|---------------------------------------------|
+| `+` `-` `*` `/` `%`   | suma, resta, producte, divisió entera, mòdul|
+| `**`                  | exponenciació                               |
+| `++` `--`             | increment, decrement                        |
+| `+=` `-=` `*=` `/=` `%=` | assignació amb operació                  |
+| `<<` `>>`             | desplaçament de bits                        |
+| `&` `\|` `^` `~`      | AND, OR, XOR, NOT **bit a bit**             |
+| `<` `<=` `>` `>=` `==` `!=` | comparació (retorna 1 o 0)            |
+| `&&` `\|\|` `!`       | AND, OR, NOT **lògics**                     |
+
+```bash
+echo $(( 2 ** 10 ))          # 1024
+echo $(( 17 % 5 ))           # 2
+echo $(( 1 << 4 ))           # 16
+echo $(( RANDOM % 10 + 1 ))  # nombre aleatori entre 1 i 10
+```
+
+-   `RANDOM` és una variable especial de bash que dóna un enter aleatori (0–32767) cada cop que es llegeix.
+
+# Arrays
+
+## Arrays indexats i associatius
+
+Un **array** guarda diversos valors en una sola variable.
+
+```bash
+# Indexat: índexs enters que comencen en 0
+tipus=("Aigua" "Foc" "Verí")
+
+# Associatiu (diccionari): claus de text. Cal declarar-lo!
+declare -A pokedex
+pokedex=([Bulbasaur]=1 [Charmander]=4 [Squirtle]=7)
+```
+
+| Operació            | Indexat                  | Associatiu                    |
+|---------------------|--------------------------|-------------------------------|
+| Llegir un element   | `${tipus[2]}`            | `${pokedex[Bulbasaur]}`       |
+| Modificar / afegir  | `tipus[1]="Elèctric"`    | `pokedex[Pikachu]=25`         |
+| Afegir al final     | `tipus+=("Planta")`      | —                             |
+| Tots els valors     | `"${tipus[@]}"`          | `"${pokedex[@]}"`             |
+| **Índexs / claus**  | `"${!tipus[@]}"`         | `"${!pokedex[@]}"`            |
+| Longitud            | `${#tipus[@]}`           | `${#pokedex[@]}`              |
+| Eliminar element    | `unset tipus[2]`         | `unset pokedex[Charmander]`   |
+
+::: {.errorcomu title="unset no reindexa" .fragment}
+Després de `unset tipus[2]`, l'array té un **forat**: els índexs són `0 1 3`, la longitud passa a 3 i `${tipus[2]}` és buit. Per això convé recórrer amb `"${!tipus[@]}"`.
+:::
+
+## Recórrer arrays
+
+```bash
+equip=("Bulbasaur" "Charmander" "Squirtle")
+
+echo "Entrades de la Pokédex:"
+for pokemon in "${equip[@]}"; do
+    echo "- $pokemon"
+done
+```
+
+```bash
+declare -A pokedex=([Bulbasaur]=1 [Charmander]=4 [Squirtle]=7)
+
+for nom in "${!pokedex[@]}"; do
+    printf "#%03d  %s\n" "${pokedex[$nom]}" "$nom"
+done
+```
+
+-   `"${equip[@]}"` es comporta com `"$@"`: cada element és una paraula, encara que tingui espais.
+-   L'ordre dels diccionaris **no està garantit**.
+-   Els **paràmetres posicionals** són, en essència, un array: `"$@"`.
+-   Un array **no s'exporta** a l'entorn dels fills (l'entorn només guarda cadenes).
+
+# Cadenes de text
+
+## Manipulació de cadenes (I)
+
+```bash
+s="Hello, world!"
+
+echo ${#s}                     # 13           longitud
+echo ${s:7}                    # world!       des de la posició 7
+echo ${s:7:2}                  # wo           2 caràcters des de la 7
+
+echo ${s/world/Earth}          # Hello, Earth!    1a coincidència
+echo ${s//l/L}                 # HeLLo, worLd!    totes les coincidències
+echo ${s/#Hello/Bye}           # Bye, world!      només al principi
+echo ${s^^}                    # HELLO, WORLD!    majúscules
+echo ${s,,}                    # hello, world!    minúscules
+```
+
+-   Tot es fa **dins la shell**, sense crear cap procés (`sed`, `cut`, `tr` en crearien un). Per a operacions simples és molt més ràpid.
+
+## Manipulació de cadenes (II): eliminar patrons
+
+`#` treu des del **davant**, `%` treu des del **final**. Un símbol = coincidència **més curta**; doble = **més llarga**.
+
+```bash
+s="Hello, hello, world!"
+
+echo ${s#H*e}        # llo, hello, world!   treu "He"
+echo ${s##H*e}       # llo, world!          treu "Hello, he"
+echo ${s%l*}         # Hello, hello, wor    treu "ld!"
+echo ${s%%l*}        # He                   treu "llo, hello, world!"
+```
+
+Un ús molt comú: **extensions i noms de fitxer**.
+
+```bash
+fitxer="/home/jordi/pokedex/pikachu.tar.gz"
+
+echo ${fitxer##*/}        # pikachu.tar.gz   (equival a basename)
+echo ${fitxer%/*}         # /home/jordi/pokedex   (equival a dirname)
+echo ${fitxer%.gz}        # .../pikachu.tar
+echo ${fitxer%%.*}        # /home/jordi/pokedex/pikachu
+```
+
+::: {.concepte title="Mnemotècnic" .fragment}
+Al teclat, `#` és a l'**esquerra** del `$` i `%` a la **dreta**: `#` actua per davant, `%` per darrere.
+:::
+
+# Interacció amb l'usuari
+
+## `read`
+
+`read` llegeix una línia de l'entrada estàndard i la reparteix en variables:
+
+```bash
+#!/bin/bash
+echo "Quin és el teu nom i cognom?"
+read nom cognom
+echo "Hola $nom $cognom!"
+```
+
+| Opció         | Efecte                                         |
+|---------------|------------------------------------------------|
+| `-p "text"`   | mostra un *prompt*                             |
+| `-s`          | no fa *echo* (contrasenyes)                    |
+| `-t N`        | *timeout* de N segons                          |
+| `-n N`        | llegeix només N caràcters                      |
+| `-a array`    | desa les paraules en un array                  |
+| `-r`          | no interpreta `\` (recomanat)                  |
+
+```bash
+read -r -p "Quin Pokémon vols triar? " triat
+echo "Has triat: ${triat:-Pikachu}"
+```
+
+-   Si hi ha més paraules que variables, l'**última** variable rep **tota la resta**.
+
+## `exec`
+
+`exec` **substitueix** el procés de la shell pel programa indicat: no hi ha `fork()`, només l'`exec()`.
+
+```bash
+#!/bin/bash
+echo "Abans de l'exec  (PID $$)"
+exec sleep 30
+echo "Això no s'executarà mai"
+```
+
+-   El PID **no canvia**: el procés ara és `sleep`. El script ja no existeix i el codi següent no s'arriba a executar.
+-   Útil en *wrappers*: el programa final **substitueix** el script i rep directament els senyals.
+-   `exec` **sense comanda** serveix per **redirigir** els descriptors de la shell actual (ho veurem a la sessió següent).
+
+# Exemple integrador
+
+## Exemple: fitxa d'un Pokémon
+
+```bash
+#!/bin/bash
+# fitxa.sh <nom> [nivell]
+readonly VERSIO="1.0"
+declare -A atac=([Pikachu]=55 [Charmander]=52 [Bulbasaur]=49 [Squirtle]=48)
+
+nom="${1:?Ús: $0 <nom> [nivell]}"       # obligatori: si falta, error
+nivell="${2:-5}"                        # opcional, per defecte 5
+
+base="${atac[$nom]:-40}"                # atac base (40 si no el coneixem)
+atac_total=$(( base + nivell * 2 ))
+
+printf "%-12s nivell %3d  atac %4d  (script v%s, PID %d)\n" \
+       "$nom" "$nivell" "$atac_total" "$VERSIO" "$$"
+```
+
+```bash
+./fitxa.sh Pikachu 12
+# Pikachu      nivell  12  atac   79  (script v1.0, PID 4321)
+```
+
+## Resum
+
+::: {.resum}
+-   La **shell** és un procés d'usuari: per a cada comanda externa fa **`fork` + `exec` + `wait`**. Els *builtins* s'executen dins del procés.
+-   Un **script** és un fitxer amb comandes; el **shebang** el llegeix el nucli. `source` l'executa a la shell actual.
+-   **Cometes**: simples (tot literal), dobles (expandeix `$`), `\` (un caràcter). **Cometeja sempre `"$var"`**.
+-   Les variables són **locals a la shell**; `export` les **copia** a l'entorn dels fills. Els fills mai no poden modificar el pare.
+-   Variables especials: `$0 $1.. $# "$@" $? $$ $! $PPID`.
+-   La shell **expandeix abans d'executar**: claus, tilde, variables, comandes, aritmètica, *word splitting*, *globbing*.
+-   Aritmètica **entera** amb `$(( ))`; arrays indexats i associatius; manipulació de cadenes amb `${...}`.
+:::
